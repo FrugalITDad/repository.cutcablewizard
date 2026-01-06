@@ -5,7 +5,6 @@ import xbmc
 import urllib.request
 import os
 import json
-import xbmcvfs
 
 ADDON = xbmcaddon.Addon(id="plugin.program.cutcablewizard")
 ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
@@ -107,26 +106,29 @@ def install_build(zip_path, build_id):
     if not dialog.yesno("Ready to Install", f"Install {build_id} build?\n\nYour current setup will be replaced."):
         return False
     
-    # Clear packages first
-    xbmc.executebuiltin('UpdateAddonRepos')
-    xbmc.executebuiltin('CleanPackages')
-    
     dialog = xbmcgui.DialogProgress()
     dialog.create("CutCableWizard", "Installing build...")
+    dialog.update(25)
     
-    # Install from zip (Kodi standard method)
-    success = xbmc.executebuiltin(f'InstallAddon("{zip_path}")')
+    # Enable file browsing
+    cmd = 'Skin.SetBool(propname="EnableFileBrowse",value="true")'
+    xbmc.executebuiltin(cmd)
+    dialog.update(50)
+    
+    # Install ZIP using correct Kodi method
+    success = xbmc.executebuiltin(f'ZipFile("{zip_path}",=special://home/)')
+    
+    dialog.update(75, "Finalizing...")
+    xbmc.sleep(2000)
     
     if success:
-        dialog.update(50, "Restarting Kodi...")
-        xbmc.sleep(3000)
         dialog.close()
-        xbmcgui.Dialog().ok("Success!", f"{build_id} installed!\n\nKodi will restart.")
+        xbmcgui.Dialog().ok("Success!", f"{build_id} installed!\n\nKodi will restart in 5 seconds.")
         xbmc.executebuiltin('RestartApp')
         return True
     else:
         dialog.close()
-        xbmcgui.Dialog().ok("Install Failed", "Build installation failed. Check log.")
+        xbmcgui.Dialog().ok("Install Failed", "Build installation failed.\nCheck Kodi log for details.")
         return False
 
 def main():
