@@ -1,8 +1,12 @@
 import xbmcaddon
 import xbmcgui
+import xbmcvfs
 import xbmc
+import urllib.request
+import os
 
 ADDON = xbmcaddon.Addon(id="plugin.program.cutcablewizard")
+ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
 
 BUILD_OPTIONS = [
     ("cordcutter_base",        "CordCutter Base\n\n[COLOR gray]Verified Free Services[/COLOR]"),
@@ -14,7 +18,7 @@ BUILD_OPTIONS = [
     ("cordcutter_admin",       "CordCutter Admin\n\n[COLOR gray]Admin build only[/COLOR]"),
 ]
 
-ADMIN_PASSWORD = "cordcutter2026"  # Change this to whatever you want
+ADMIN_PASSWORD = "2026"
 
 def check_admin_password():
     dialog = xbmcgui.Dialog()
@@ -30,7 +34,6 @@ def select_build():
     
     build_id = BUILD_OPTIONS[choice][0]
     
-    # Password protect admin build
     if build_id == "cordcutter_admin":
         if not check_admin_password():
             dialog.ok("Access Denied", "Incorrect admin password.")
@@ -38,17 +41,48 @@ def select_build():
     
     return build_id
 
+def download_build(build_id):
+    base_url = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/repo/zips/builds/%s/build-1.0.0.zip" % build_id
+    local_path = os.path.join(ADDON_DATA, "temp_%s.zip" % build_id)
+    
+    try:
+        dialog = xbmcgui.DialogProgress()
+        dialog.create("CutCableWizard", "Downloading %s..." % build_id)
+        
+        urllib.request.urlretrieve(base_url, local_path)
+        dialog.close()
+        return local_path
+    except:
+        dialog.close()
+        xbmcgui.Dialog().ok("Download Failed", "Could not download %s." % build_id)
+        return None
+
+def install_build(zip_path):
+    dialog = xbmcgui.Dialog()
+    if not dialog.yesno("Install Build", "Install this build?"):
+        return False
+    
+    dialog = xbmcgui.DialogProgress()
+    dialog.create("CutCableWizard", "Installing build...")
+    
+    success = xbmc.executebuiltin('RunAddon("plugin.program.cutcablewizard", "%s")' % zip_path)
+    dialog.close()
+    
+    return success
+
 def main():
     build_id = select_build()
     if not build_id:
         return
 
     dialog = xbmcgui.Dialog()
-    dialog.ok(
-        "CutCableWizard",
-        "You selected build:\n\n[COLOR lime]%s[/COLOR]\n\nNext step: implement download/apply logic."
-        % BUILD_OPTIONS[[id for (id, label) in BUILD_OPTIONS].index(build_id)][1]
-    )
+    dialog.ok("CutCableWizard", "Selected: %s\n\nDownloading..." % build_id)
+    
+    zip_path = download_build(build_id)
+    if zip_path and install_build(zip_path):
+        dialog.ok("Success", "Build %s installed!" % build_id)
+    else:
+        dialog.ok("Failed", "Build installation failed.")
 
 if __name__ == "__main__":
     main()
