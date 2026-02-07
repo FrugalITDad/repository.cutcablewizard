@@ -98,7 +98,7 @@ def auto_install_build(zip_path):
     source_path = xbmcvfs.translatePath(zip_path)
     userdata_path = xbmcvfs.translatePath("special://home/userdata/")
 
-    xbmc.log(f"[CutCableWizard] Installing build from {source_path} to {userdata_path}", xbmc.LOGNOTICE)
+    xbmc.log(f"[CutCableWizard] Installing build from {source_path} to {userdata_path}", xbmc.LOGINFO)
 
     try:
         with zipfile.ZipFile(source_path, "r") as zf:
@@ -122,7 +122,6 @@ def auto_install_build(zip_path):
                     xbmcvfs.mkdirs(parent)
 
                 with zf.open(member, "r") as source_file:
-                    # Use xbmcvfs.File for Kodi paths
                     f = xbmcvfs.File(target, "w")
                     try:
                         f.write(source_file.read())
