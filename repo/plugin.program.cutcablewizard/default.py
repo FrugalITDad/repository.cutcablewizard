@@ -97,24 +97,27 @@ def auto_install_build(zip_path):
     xbmc.executebuiltin('SetGUIOption(GUIInfo.156,true)')
     xbmc.sleep(1000)
 
+    # Resolve absolute paths
+    temp_install_path = xbmcvfs.translatePath("special://temp/temp_build.zip")
+    source_path = xbmcvfs.translatePath(zip_path)
+
     # Copy ZIP to Kodi's temp install location
-    temp_install_path = "special://temp/temp_build.zip"
-    xbmcvfs.copy(zip_path, xbmcvfs.translatePath(temp_install_path))
+    if xbmcvfs.exists(temp_install_path):
+        xbmcvfs.delete(temp_install_path)
+    xbmcvfs.copy(source_path, temp_install_path)
 
     dialog.update(50)
 
-    # Trigger ZIP installation via Kodi's native installer
-    xbmc.executebuiltin('Skin.SetBool(EnableFileBrowse,true)')
-    xbmc.executebuiltin(f'RunScript(special://xbmc/system/python/lib.py,"{temp_install_path}")')
-    xbmc.sleep(3000)
+    # Ask Kodi to install the zip we just copied
+    xbmc.executebuiltin(f'InstallAddon("{temp_install_path}")')
 
     dialog.update(75, "Restarting Kodi...")
     xbmc.sleep(2000)
 
     # Clean up
     try:
-        xbmcvfs.delete(zip_path)
-        xbmcvfs.delete(xbmcvfs.translatePath(temp_install_path))
+        xbmcvfs.delete(source_path)
+        xbmcvfs.delete(temp_install_path)
     except Exception:
         pass
 
