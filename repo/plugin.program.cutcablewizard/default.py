@@ -48,6 +48,10 @@ def download_build(build_id):
     download_url = f"https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/v1.0.0/{build_id}-build-1.0.0.zip"
     local_path = os.path.join(ADDON_DATA, f"temp_{build_id}.zip")
 
+    # Ensure addon data folder exists
+    if not xbmcvfs.exists(ADDON_DATA):
+        xbmcvfs.mkdirs(ADDON_DATA)
+
     try:
         dialog = xbmcgui.DialogProgress()
         dialog.create("CutCableWizard", f"Downloading {build_id}...")
