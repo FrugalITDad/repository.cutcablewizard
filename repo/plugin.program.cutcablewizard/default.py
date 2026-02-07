@@ -6,6 +6,7 @@ import urllib.request
 import os
 import json
 import ssl
+import zipfile
 
 ADDON = xbmcaddon.Addon(id="plugin.program.cutcablewizard")
 ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
@@ -89,39 +90,61 @@ def download_build(build_id):
 
 
 def auto_install_build(zip_path):
-    """One-click automatic build installation"""
+    """Extract build over Kodi userdata and restart"""
     dialog = xbmcgui.DialogProgress()
     dialog.create("CutCableWizard", "Installing build...")
 
-    # Enable unknown sources (required for ZIP installs)
-    xbmc.executebuiltin('SetGUIOption(GUIInfo.156,true)')
+    # Resolve paths
+    source_path = xbmcvfs.translatePath(zip_path)
+    userdata_path = xbmcvfs.translatePath("special://home/userdata/")
+
+    xbmc.log(f"[CutCableWizard] Installing build from {source_path} to {userdata_path}", xbmc.LOGNOTICE)
+
+    try:
+        with zipfile.ZipFile(source_path, "r") as zf:
+            file_list = zf.infolist()
+            total = len(file_list) if file_list else 1
+
+            for idx, member in enumerate(file_list):
+                percent = int((idx + 1) * 100 / total)
+                dialog.update(percent, "Installing build...", member.filename)
+
+                # Build target path (adjust here if your zip has a wrapper folder to strip)
+                target = os.path.join(userdata_path, member.filename)
+
+                if member.is_dir():
+                    if not xbmcvfs.exists(target):
+                        xbmcvfs.mkdirs(target)
+                    continue
+
+                parent = os.path.dirname(target)
+                if parent and not xbmcvfs.exists(parent):
+                    xbmcvfs.mkdirs(parent)
+
+                with zf.open(member, "r") as source_file:
+                    # Use xbmcvfs.File for Kodi paths
+                    f = xbmcvfs.File(target, "w")
+                    try:
+                        f.write(source_file.read())
+                    finally:
+                        f.close()
+
+    except Exception as e:
+        dialog.close()
+        xbmc.log(f"[CutCableWizard] Error extracting build: {repr(e)}", xbmc.LOGERROR)
+        xbmcgui.Dialog().ok("Install Failed", f"Error applying build.\n\n{repr(e)}")
+        return False
+
+    dialog.update(100, "Finalizing...", "")
     xbmc.sleep(1000)
 
-    # Resolve absolute paths
-    temp_install_path = xbmcvfs.translatePath("special://temp/temp_build.zip")
-    source_path = xbmcvfs.translatePath(zip_path)
-
-    # Copy ZIP to Kodi's temp install location
-    if xbmcvfs.exists(temp_install_path):
-        xbmcvfs.delete(temp_install_path)
-    xbmcvfs.copy(source_path, temp_install_path)
-
-    dialog.update(50)
-
-    # Ask Kodi to install the zip we just copied
-    xbmc.executebuiltin(f'InstallAddon("{temp_install_path}")')
-
-    dialog.update(75, "Restarting Kodi...")
-    xbmc.sleep(2000)
-
-    # Clean up
     try:
         xbmcvfs.delete(source_path)
-        xbmcvfs.delete(temp_install_path)
     except Exception:
         pass
 
     dialog.close()
+    xbmcgui.Dialog().ok("Build Installed", "Kodi will now restart to apply changes.")
     xbmc.executebuiltin('RestartApp')
     return True
 
