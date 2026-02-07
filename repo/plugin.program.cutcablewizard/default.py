@@ -22,10 +22,12 @@ BUILD_OPTIONS = [
 
 ADMIN_PASSWORD = "2026"
 
+
 def check_admin_password():
     dialog = xbmcgui.Dialog()
     password = dialog.input("Admin build password:", type=xbmcgui.ALPHANUM_HIDE_INPUT)
     return password == ADMIN_PASSWORD
+
 
 def select_build():
     labels = [label for (_id, label) in BUILD_OPTIONS]
@@ -41,6 +43,7 @@ def select_build():
             return None
     return build_id
 
+
 def download_build(build_id):
     download_url = f"https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/v1.0.0/{build_id}-build-1.0.0.zip"
     local_path = os.path.join(ADDON_DATA, f"temp_{build_id}.zip")
@@ -49,6 +52,7 @@ def download_build(build_id):
         dialog = xbmcgui.DialogProgress()
         dialog.create("CutCableWizard", f"Downloading {build_id}...")
 
+        # Set up SSL and User-Agent for GitHub
         ctx = ssl.create_default_context()
         opener = urllib.request.build_opener()
         opener.addheaders = [("User-Agent", "Kodi-CordCutterWizard/1.0")]
@@ -72,10 +76,13 @@ def download_build(build_id):
 
         dialog.close()
         return local_path
+
     except Exception as e:
         dialog.close()
-        xbmcgui.Dialog().ok("Download Failed", f"Could not download {build_id}.\n\n{e}")
+        xbmc.log(f"[CutCableWizard] download_build error for {build_id}: {repr(e)}", xbmc.LOGERROR)
+        xbmcgui.Dialog().ok("Download Failed", f"Could not download {build_id}.\n\n{repr(e)}")
         return None
+
 
 def auto_install_build(zip_path):
     """One-click automatic build installation"""
@@ -104,12 +111,13 @@ def auto_install_build(zip_path):
     try:
         xbmcvfs.delete(zip_path)
         xbmcvfs.delete(xbmcvfs.translatePath(temp_install_path))
-    except:
+    except Exception:
         pass
 
     dialog.close()
     xbmc.executebuiltin('RestartApp')
     return True
+
 
 def main():
     dialog = xbmcgui.Dialog()
@@ -118,7 +126,7 @@ def main():
     if choice == 1:
         try:
             xbmc.executebuiltin('RunAddon("peno64.ezmaintenance")')
-        except:
+        except Exception:
             xbmcgui.Dialog().ok("Maintenance", "EZ Maintenance+ not found.")
         return
 
@@ -137,6 +145,7 @@ def main():
     # Auto install (one click - no user intervention)
     xbmcgui.Dialog().ok("Ready", f"{build_id} will now be installed automatically.\n\nKodi will restart.")
     auto_install_build(zip_path)
+
 
 if __name__ == "__main__":
     main()
