@@ -121,12 +121,9 @@ def auto_install_build(zip_path):
                 if parent and not xbmcvfs.exists(parent):
                     xbmcvfs.mkdirs(parent)
 
-                with zf.open(member, "r") as source_file:
-                    f = xbmcvfs.File(target, "w")
-                    try:
-                        f.write(source_file.read())
-                    finally:
-                        f.close()
+                # Write using normal file I/O
+                with zf.open(member, "r") as source_file, open(target, "wb") as out_f:
+                    out_f.write(source_file.read())
 
     except Exception as e:
         dialog.close()
