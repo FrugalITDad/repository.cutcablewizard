@@ -3,10 +3,9 @@ import urllib.request, os, json, ssl, zipfile, shutil
 
 # --- CONFIGURATION ---
 ADDON = xbmcaddon.Addon()
-ADDON_ID = ADDON.getAddonInfo('id')
 ADDON_NAME = ADDON.getAddonInfo('name')
 ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
-USER_AGENT = "Kodi-CutCableWizard/1.4.2"
+USER_AGENT = "Kodi-CutCableWizard/1.4.5"
 MANIFEST_URL = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
 
 def get_json(url):
@@ -18,7 +17,6 @@ def get_json(url):
             return json.loads(response.read())
     except: return None
 
-# --- ROBUST BACKUP ENGINE ---
 def backup_current_setup():
     backup_path = os.path.join(ADDON_DATA, 'backup_userdata_stable')
     home_path = xbmcvfs.translatePath("special://home/")
@@ -50,7 +48,6 @@ def backup_current_setup():
     dp.close()
     return True
 
-# --- INSTALLATION ENGINE ---
 def install_build(zip_path, build_id, version):
     dest = xbmcvfs.translatePath("special://home/")
     dp = xbmcgui.DialogProgress()
@@ -62,19 +59,16 @@ def install_build(zip_path, build_id, version):
                 if i % 100 == 0: dp.update(int(i*100/len(files)), f"Installing: {f.filename[:30]}")
                 zf.extract(f, dest)
         dp.close()
-        
-        # Cleanup
         xbmcvfs.delete(zip_path)
         
-        # --- THE MAGIC STEPS ---
-        # 1. Store version
+        # Write settings to Kodi's database
         ADDON.setSetting(f"ver_{build_id}", version)
-        # 2. Set the 'Setup Flag' - This tells service.py to run on next boot
         ADDON.setSetting("run_setup", "true")
         
-        xbmcgui.Dialog().ok("Success", "Build Applied! Kodi will now close. Restart Kodi to finish setup and personalization.")
+        xbmcgui.Dialog().ok("Success", "Build Applied! Kodi will now close. Restart to finish personalization.")
         
-        # Force close to ensure files aren't overwritten by Kodi on exit
+        # CRITICAL: Allow time for settings to write to disk before force-kill
+        xbmc.sleep(2000)
         os._exit(1)
     except Exception as e:
         dp.close()
@@ -89,23 +83,14 @@ def main():
     
     if choice != -1:
         sel = builds[choice]
-        # Check if an update is actually needed
         if ADDON.getSetting(f"ver_{sel['id']}") != sel['version']:
-            if xbmcgui.Dialog().yesno("Build Update", f"A new version (v{sel['version']}) is available. Update now?"):
+            if xbmcgui.Dialog().yesno("Update", f"Install {sel['name']} v{sel['version']}?"):
                 if backup_current_setup():
                     path = os.path.join(ADDON_DATA, "temp.zip")
-                    # Download
                     dp = xbmcgui.DialogProgress()
                     dp.create(ADDON_NAME, "Downloading...")
                     urllib.request.urlretrieve(sel['download_url'], path, lambda nb, bs, fs: dp.update(int(nb*bs*100/fs)))
                     dp.close()
-                    # Install
-                    install_build(path, sel['id'], sel['version'])
-        else:
-            if xbmcgui.Dialog().yesno("No Update", "You are on the latest version. Reinstall anyway?"):
-                if backup_current_setup():
-                    path = os.path.join(ADDON_DATA, "temp.zip")
-                    urllib.request.urlretrieve(sel['download_url'], path)
                     install_build(path, sel['id'], sel['version'])
 
 if __name__ == "__main__":
