@@ -1,12 +1,15 @@
 import xbmcaddon, xbmcgui, xbmcvfs, xbmc
-import urllib.request, os, json, ssl, zipfile, shutil
+import urllib.request, os, json, ssl, zipfile, shutil, sqlite3
 
 # --- CONFIGURATION ---
 ADDON = xbmcaddon.Addon()
+ADDON_ID = ADDON.getAddonInfo('id')
 ADDON_NAME = ADDON.getAddonInfo('name')
 ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
-USER_AGENT = "Kodi-CutCableWizard/1.4.5"
+# This physical file is the "Flag" that survives the restart
+TRIGGER_FILE = os.path.join(ADDON_DATA, 'trigger.txt') 
 MANIFEST_URL = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
+USER_AGENT = "Kodi-CutCableWizard/1.4.6"
 
 def get_json(url):
     try:
@@ -16,6 +19,32 @@ def get_json(url):
         with urllib.request.urlopen(req, context=ctx, timeout=10) as response:
             return json.loads(response.read())
     except: return None
+
+# --- FORCE ENABLE ADDONS (The DB Hack) ---
+def force_enable_addons():
+    # This locates Kodi's internal database for addons (usually Addons33.db for Omega)
+    db_path = xbmcvfs.translatePath("special://home/userdata/Database")
+    if not os.path.exists(db_path): return
+    
+    # Find the latest Addons database file
+    db_files = [f for f in os.listdir(db_path) if f.startswith("Addons") and f.endswith(".db")]
+    if not db_files: return
+    
+    # Sort to get the highest version number
+    latest_db = sorted(db_files)[-1]
+    full_db_path = os.path.join(db_path, latest_db)
+    
+    xbmc.log(f"--- [Wizard] Attempting to force enable addons in: {latest_db}", xbmc.LOGINFO)
+    
+    try:
+        # Connect to the DB and force 'enabled' to 1 for everything installed
+        conn = sqlite3.connect(full_db_path)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE installed SET enabled = 1")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        xbmc.log(f"--- [Wizard] DB Update Failed: {str(e)}", xbmc.LOGERROR)
 
 def backup_current_setup():
     backup_path = os.path.join(ADDON_DATA, 'backup_userdata_stable')
@@ -61,14 +90,20 @@ def install_build(zip_path, build_id, version):
         dp.close()
         xbmcvfs.delete(zip_path)
         
-        # Write settings to Kodi's database
+        # --- CRITICAL STEPS ---
+        # 1. Create the PHYSICAL trigger file (This survives the reboot)
+        if not xbmcvfs.exists(ADDON_DATA): xbmcvfs.mkdirs(ADDON_DATA)
+        with open(TRIGGER_FILE, "w") as f:
+            f.write("trigger_active")
+            
+        # 2. Force Enable Addons in DB
+        force_enable_addons()
+        
+        # 3. Store version info
         ADDON.setSetting(f"ver_{build_id}", version)
-        ADDON.setSetting("run_setup", "true")
-        
-        xbmcgui.Dialog().ok("Success", "Build Applied! Kodi will now close. Restart to finish personalization.")
-        
-        # CRITICAL: Allow time for settings to write to disk before force-kill
-        xbmc.sleep(2000)
+
+        xbmcgui.Dialog().ok("Success", "Build Applied! Kodi will now close.\n\nPLEASE RESTART KODI IMMEDIATELY.")
+        xbmc.sleep(1000)
         os._exit(1)
     except Exception as e:
         dp.close()
