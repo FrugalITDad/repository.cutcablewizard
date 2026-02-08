@@ -3,10 +3,11 @@
     {
       "id": "cordcutter_base",
       "name": "CordCutter Base",
-      "description": "Verified Free Services",
-      "version": "1.0.0",
-      "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/v1.0.0/cordcutter_base-build-1.0.0.zip",
+      "description": "Verified Free Services foundation. Lite and fast.",
+      "version": "1.0.1",
+      "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/v1.0.1/cordcutter_base-build-1.0.1.zip",
       "size_mb": 176,
+      "changelog": "Added Gismeteo weather integration, auto-backup engine, and device personalization questions.",
       "admin_only": false
     }
   ]
