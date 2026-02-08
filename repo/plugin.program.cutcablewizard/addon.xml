@@ -1,6 +1,6 @@
 <addon id="plugin.program.cutcablewizard"
        name="CutCableWizard"
-       version="1.4.0"
+       version="1.4.1"
        provider-name="FrugalITDad">
     <requires>
         <import addon="xbmc.python" version="3.0.0" />
