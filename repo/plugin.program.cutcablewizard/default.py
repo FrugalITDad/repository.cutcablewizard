@@ -1,107 +1,84 @@
-import xbmcaddon, xbmcgui, xbmcvfs, xbmc
-import urllib.request, os, json, ssl, zipfile, shutil, re
+import xbmc, xbmcaddon, xbmcgui, xbmcvfs
+import urllib.request, os, json, ssl, zipfile, shutil, re, sqlite3
 
-# --- CONFIGURATION ---
+# --- CONFIG ---
 ADDON = xbmcaddon.Addon()
-ADDON_ID = 'plugin.program.cutcablewizard' 
-REPO_ID = 'repository.cutcablewizard'       
-ADDON_NAME = ADDON.getAddonInfo('name')
+ADDON_ID = 'plugin.program.cutcablewizard'
+REPO_ID = 'repository.cutcablewizard'
 ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
-TRIGGER_FILE = os.path.join(ADDON_DATA, 'trigger.txt') 
+TRIGGER_FILE = os.path.join(ADDON_DATA, 'trigger.txt')
 MANIFEST_URL = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
-USER_AGENT = "Kodi-CutCableWizard/1.4.7"
 
 def get_json(url):
     try:
         ctx = ssl.create_default_context()
-        ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
-        req = urllib.request.Request(url, headers={'User-Agent': USER_AGENT})
-        with urllib.request.urlopen(req, context=ctx, timeout=10) as response:
-            return json.loads(response.read())
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with urllib.request.urlopen(url, context=ctx) as r:
+            return json.loads(r.read())
     except: return None
 
-def inject_advanced_settings(userdata_path):
-    """Safely merges skin-force into an existing advancedsettings.xml."""
-    adv_xml = os.path.join(userdata_path, 'advancedsettings.xml')
-    skin_block = "<lookandfeel><skin>skin.aeonnox.silvo</skin></lookandfeel>"
+def patch_database():
+    """Manually enables the Skin, Wizard, and Repo in the SQL database."""
+    db_dir = xbmcvfs.translatePath("special://home/userdata/Database")
+    db_files = [f for f in os.listdir(db_dir) if f.startswith("Addons") and f.endswith(".db")]
+    if not db_files: return
     
-    if os.path.exists(adv_xml):
-        with open(adv_xml, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # If the skin setting is already there, don't double up
-        if 'skin.aeonnox.silvo' in content:
-            return
-            
-        # If lookandfeel exists, replace it; otherwise, insert before closing tag
-        if '<lookandfeel>' in content:
-            content = re.sub(r'<lookandfeel>.*?</lookandfeel>', skin_block, content, flags=re.DOTALL)
-        else:
-            content = content.replace('</advancedsettings>', f'  {skin_block}\n</advancedsettings>')
-        
-        with open(adv_xml, 'w', encoding='utf-8') as f:
-            f.write(content)
-    else:
-        # File doesn't exist, create fresh
-        with open(adv_xml, 'w', encoding='utf-8') as f:
-            f.write(f'<advancedsettings>\n  {skin_block}\n</advancedsettings>')
-
-def install_build(zip_path, build_id, version):
-    home = xbmcvfs.translatePath("special://home/")
-    addons_path = os.path.join(home, 'addons')
-    userdata_path = os.path.join(home, 'userdata')
-    
-    dp = xbmcgui.DialogProgress()
-    dp.create(ADDON_NAME, "Extracting Build...")
-    
+    target_db = os.path.join(db_dir, sorted(db_files)[-1])
     try:
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            files = zf.infolist()
-            for i, f in enumerate(files):
-                if i % 100 == 0: dp.update(int(i*100/len(files)), f"Installing: {f.filename[:30]}")
-                zf.extract(f, home)
-        
-        # 1. THE MERGE FIX
-        inject_advanced_settings(userdata_path)
+        conn = sqlite3.connect(target_db)
+        cursor = conn.cursor()
+        ids = [ADDON_ID, REPO_ID, 'skin.aeonnox.silvo']
+        for a_id in ids:
+            cursor.execute("UPDATE addon SET enabled = 1 WHERE addonID = ?", (a_id,))
+        conn.commit()
+        conn.close()
+    except: pass
 
-        # 2. TRIGGER SETUP
-        if not os.path.exists(ADDON_DATA): os.makedirs(ADDON_DATA)
-        with open(TRIGGER_FILE, "w") as f: f.write("active")
-        
-        # 3. PURGE AND FINALIZE
-        binaries = ['pvr.iptvsimple', 'inputstream.adaptive', 'inputstream.ffmpegdirect', 'inputstream.rtmp']
-        for b in binaries:
-            b_p = os.path.join(addons_path, b)
-            if os.path.exists(b_p): shutil.rmtree(b_p, ignore_errors=True)
+def install_build(url, build_id, version):
+    path = os.path.join(ADDON_DATA, "temp.zip")
+    dp = xbmcgui.DialogProgress()
+    dp.create("CutCable Wizard", "Downloading Build...")
+    
+    # Download
+    urllib.request.urlretrieve(url, path, lambda nb, bs, fs: dp.update(int(nb*bs*100/fs)))
+    
+    # Extract
+    dp.update(0, "Extracting... Please wait.")
+    home = xbmcvfs.translatePath("special://home/")
+    with zipfile.ZipFile(path, "r") as zf:
+        zf.extractall(home)
+    
+    # Force Skin in AdvancedSettings
+    adv_file = xbmcvfs.translatePath("special://userdata/advancedsettings.xml")
+    with open(adv_file, "w") as f:
+        f.write('<advancedsettings><lookandfeel><skin>skin.aeonnox.silvo</skin></lookandfeel></advancedsettings>')
 
-        dp.close()
-        xbmcgui.Dialog().ok("Success", "Build Applied!\n\nRESTART KODI NOW.")
-        xbmc.sleep(1000)
-        os._exit(1)
-        
-    except Exception as e:
-        if dp: dp.close()
-        xbmcgui.Dialog().ok("Error", str(e))
+    # Database Patching
+    patch_database()
+
+    # Trigger File for Service
+    if not os.path.exists(ADDON_DATA): os.makedirs(ADDON_DATA)
+    with open(TRIGGER_FILE, "w") as f: f.write("active")
+    ADDON.setSetting(f"ver_{build_id}", version)
+
+    dp.close()
+    xbmcgui.Dialog().ok("Complete", "Build Installed. Restart Kodi now!")
+    os._exit(1)
 
 def main():
-    options = ["Install Build", "Smart Fresh Start"]
-    choice = xbmcgui.Dialog().select(ADDON_NAME, options)
-    if choice == 0:
-        manifest = get_json(MANIFEST_URL)
-        if not manifest: return
-        builds = manifest["builds"]
-        b_choice = xbmcgui.Dialog().select("Select Build", [f"{b['name']} (v{b['version']})" for b in builds])
-        if b_choice != -1:
-            sel = builds[b_choice]
-            path = os.path.join(ADDON_DATA, "temp.zip")
-            dp = xbmcgui.DialogProgress()
-            dp.create(ADDON_NAME, "Downloading...")
-            urllib.request.urlretrieve(sel['download_url'], path, lambda nb, bs, fs: dp.update(int(nb*bs*100/fs)))
-            dp.close()
-            install_build(path, sel['id'], sel['version'])
-    elif choice == 1:
-        # Include your smart_fresh_start logic here
-        pass
+    manifest = get_json(MANIFEST_URL)
+    if not manifest: 
+        xbmcgui.Dialog().ok("Error", "Could not reach server.")
+        return
+        
+    builds = manifest.get("builds", [])
+    names = [f"{b['name']} (v{b['version']})" for b in builds]
+    choice = xbmcgui.Dialog().select("Select a Build", names)
+    
+    if choice != -1:
+        sel = builds[choice]
+        install_build(sel['download_url'], sel['id'], sel['version'])
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
