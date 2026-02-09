@@ -1,36 +1,41 @@
-import xbmc, xbmcaddon, xbmcvfs, os, json, xbmcgui
+import xbmc, xbmcaddon, xbmcvfs, os, re, xbmcgui
 
 ADDON = xbmcaddon.Addon()
 ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
 TRIGGER_FILE = os.path.join(ADDON_DATA, 'trigger.txt')
-SKIN_ID = 'skin.aeonnox.silvo'
 
-def apply_fixes():
-    # 1. FORCE THE SKIN (Visual First)
-    # We do this twice: once via JSON and once via Built-in
-    xbmc.log("--- [Wizard Service] Forcing Skin...", xbmc.LOGINFO)
-    xbmc.executeJSONRPC(f'{{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{{"setting":"lookandfeel.skin","value":"{SKIN_ID}"}},"id":1}}')
-    xbmc.executebuiltin(f'SetProperty(reloadsmooth,true,home)')
+def cleanup_advanced_settings():
+    adv_file = xbmcvfs.translatePath('special://userdata/advancedsettings.xml')
+    if os.path.exists(adv_file):
+        with open(adv_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Remove only the lookandfeel block
+        new_content = re.sub(r'<lookandfeel>.*?</lookandfeel>', '', content, flags=re.DOTALL)
+        
+        # If the file is now basically empty, delete it; otherwise, save it
+        if '<advancedsettings>' in new_content and len(re.sub(r'<[^>]*>', '', new_content).strip()) == 0:
+            os.remove(adv_file)
+        else:
+            with open(adv_file, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+
+def run_fix():
+    # 1. CONFIRM SKIN (Clicks "Yes" on hidden prompt)
+    xbmc.executebuiltin('SendClick(11)') 
     
-    xbmc.sleep(2000)
-    
-    # 2. TRIGGER IPTV MERGE & PVR
-    xbmc.log("--- [Wizard Service] Rebuilding PVR...", xbmc.LOGINFO)
+    # 2. IPTV MERGE
     if os.path.exists(xbmcvfs.translatePath('special://home/addons/plugin.video.iptvmerge')):
         xbmc.executebuiltin('RunAddon(plugin.video.iptvmerge, "merge")')
     
-    xbmc.executebuiltin('UpdatePVRByAddon(pvr.iptvsimple)')
-    
-    # 3. CLEANUP
+    # 3. REMOVE ONLY THE SKIN FORCE (Keep the rest of AdvancedSettings)
+    cleanup_advanced_settings()
+        
     if os.path.exists(TRIGGER_FILE):
         os.remove(TRIGGER_FILE)
-    
-    xbmcgui.Dialog().notification("Wizard", "Optimization Complete!", xbmcgui.NOTIFICATION_INFO, 5000)
 
 if __name__ == '__main__':
-    # Initial wait to let the Android UI finish loading
     monitor = xbmc.Monitor()
     if monitor.waitForAbort(15): exit()
-
     if os.path.exists(TRIGGER_FILE):
-        apply_fixes()
+        run_fix()
