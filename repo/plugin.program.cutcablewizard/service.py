@@ -6,34 +6,36 @@ TRIGGER_FILE = os.path.join(ADDON_DATA, 'firstrun.txt')
 
 def run_dependencies():
     monitor = xbmc.Monitor()
-    if monitor.waitForAbort(15): return # Wait for Kodi to initialize
+    if monitor.waitForAbort(20): return # Give Kodi time to connect to Wi-Fi
 
-    xbmcgui.Dialog().notification("Wizard", "Enabling IPTV & Dependencies...", xbmcgui.NOTIFICATION_INFO, 5000)
+    xbmcgui.Dialog().notification("CordCutter", "Finalizing IPTV Components...", xbmcgui.NOTIFICATION_INFO, 5000)
     
-    # List of required addons
+    # 1. Force Kodi to refresh its repository list
+    xbmc.executebuiltin('UpdateAddonRepos')
+    xbmc.executebuiltin('UpdateLocalAddons')
+    xbmc.sleep(2000)
+
     deps = [
-        'pvr.iptvsimple', 
         'inputstream.adaptive', 
         'inputstream.ffmpegdirect', 
-        'inputstream.rtmp'
+        'inputstream.rtmp',
+        'pvr.iptvsimple'
     ]
     
-    # 1. Force Kodi to see local changes
-    xbmc.executebuiltin('UpdateLocalAddons')
-    xbmc.executebuiltin('UpdateAddonRepos')
-    
-    # 2. Enable each one
     for d in deps:
-        xbmc.executebuiltin(f'EnableAddon("{d}")')
-        xbmc.sleep(500)
+        # This command attempts to install from the repo if missing, or enable if present
+        xbmc.executebuiltin(f'InstallAddon("{d}")')
+        xbmc.sleep(1000)
 
-    # 3. Trigger IPTV Merge
+    # 2. Trigger IPTV Merge
     if os.path.exists(xbmcvfs.translatePath('special://home/addons/plugin.video.iptvmerge')):
         xbmc.executebuiltin('RunAddon(plugin.video.iptvmerge, "merge")')
     
-    # 4. Clean up trigger
+    # 3. Cleanup trigger
     try: os.remove(TRIGGER_FILE)
     except: pass
+    
+    xbmcgui.Dialog().ok("Wizard", "IPTV Components Restored!\nYou may need to restart Kodi one last time.")
 
 if __name__ == '__main__':
     if os.path.exists(TRIGGER_FILE):
