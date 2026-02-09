@@ -2,48 +2,52 @@ import xbmc, xbmcaddon, xbmcvfs, os, xbmcgui, json
 
 ADDON = xbmcaddon.Addon()
 ADDON_ID = ADDON.getAddonInfo('id')
-ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
-TRIGGER_FILE = os.path.join(ADDON_DATA, 'firstrun.txt')
 
-def run_activation():
+def remediate():
     monitor = xbmc.Monitor()
-    # Wait 30 seconds for Fire Stick to rebuild Addons.db
-    if monitor.waitForAbort(30): return 
+    # Wait for network and database to settle
+    if monitor.waitForAbort(15): return 
 
-    xbmcgui.Dialog().notification("CordCutter", "Activating Build Components...", xbmcgui.NOTIFICATION_INFO, 5000)
-    
-    # 1. Update Check (Force Kodi to check for new Wizard version)
+    # --- PART 1: SELF-UPDATE CHECK ---
+    # This forces Kodi to check your repo and update the wizard if a new version exists
     xbmc.executebuiltin('UpdateAddonRepos')
-    xbmc.sleep(2000)
     xbmc.executebuiltin(f'InstallAddon({ADDON_ID})')
 
-    # 2. Mass Enable All Addons (Fixes "Disabled" state after DB nuke)
+    # --- PART 2: IPTV & BINARY REPAIR ---
+    # We check if IPTV Simple is actually functional
+    if not xbmc.getCondVisibility('System.HasAddon(pvr.iptvsimple)'):
+        xbmc.log(f"[{ADDON_ID}] IPTV Simple missing or disabled. Remediation starting...", xbmc.LOGINFO)
+        
+        # 1. Clear any "Ghost" Windows folders if they exist
+        home = xbmcvfs.translatePath("special://home/")
+        binaries = ['pvr.iptvsimple', 'inputstream.adaptive', 'inputstream.ffmpegdirect']
+        for b in binaries:
+            b_path = os.path.join(home, 'addons', b)
+            if os.path.exists(b_path):
+                # If there's a .dll in here, it's a Windows carry-over. Nuke it.
+                shutil_path = xbmcvfs.translatePath(b_path)
+                try: xbmcvfs.rmdir(shutil_path, True)
+                except: pass
+
+        # 2. Force install the correct Android version from the official repo
+        xbmc.executebuiltin('UpdateLocalAddons')
+        xbmc.executebuiltin('InstallAddon(pvr.iptvsimple)')
+        xbmc.executebuiltin('InstallAddon(inputstream.adaptive)')
+        
+        xbmcgui.Dialog().notification("CordCutter", "IPTV Components Repaired for Android", xbmcgui.NOTIFICATION_INFO, 5000)
+
+    # --- PART 3: MASS ENABLE ---
+    # Ensure any third-party addons that got disabled are flipped back on
     query = '{"jsonrpc":"2.0","method":"Addons.GetAddons","params":{"enabled":false},"id":1}'
     response = xbmc.executeJSONRPC(query)
     data = json.loads(response)
-    
     if 'result' in data and 'addons' in data['result']:
         for item in data['result']['addons']:
             aid = item['addonid']
-            xbmc.executebuiltin(f'EnableAddon("{aid}")')
-            xbmc.sleep(200)
-
-    # 3. Restore Binary Addons from Repo (Official Android versions)
-    deps = ['pvr.iptvsimple', 'inputstream.adaptive', 'inputstream.ffmpegdirect', 'inputstream.rtmp']
-    for d in deps:
-        xbmc.executebuiltin(f'InstallAddon("{d}")')
-        xbmc.sleep(500)
-
-    # 4. Set the Skin (Forces the UI to switch)
-    xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"lookandfeel.skin","value":"skin.aeon.nox.silvo"},"id":1}')
-
-    # 5. Clean up
-    if os.path.exists(TRIGGER_FILE):
-        try: os.remove(TRIGGER_FILE)
-        except: pass
-    
-    xbmcgui.Dialog().notification("CordCutter", "Build Fully Activated!", xbmcgui.NOTIFICATION_INFO, 5000)
+            # We don't want to enable EVERYTHING (like disabled scrapers), 
+            # but we want to enable video plugins
+            if aid.startswith('plugin.video') or aid == 'skin.aeon.nox.silvo':
+                xbmc.executebuiltin(f'EnableAddon("{aid}")')
 
 if __name__ == '__main__':
-    if os.path.exists(TRIGGER_FILE):
-        run_activation()
+    remediate()
