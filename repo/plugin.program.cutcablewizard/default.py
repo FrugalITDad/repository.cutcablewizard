@@ -12,14 +12,29 @@ MANIFEST_URL = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcabl
 # Whitelist: What we DO NOT delete during a Fresh Start
 WHITELIST = [ADDON_ID, 'repository.cutcablewizard', 'packages', 'temp']
 
+def log(msg):
+    xbmc.log(f"[{ADDON_NAME}] {msg}", xbmc.LOGINFO)
+
 def get_json(url):
     try:
         ctx = ssl.create_default_context()
         ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
         req = urllib.request.Request(url, headers={'User-Agent': 'Kodi-Wizard/1.1'})
         with urllib.request.urlopen(req, context=ctx) as r:
-            return json.loads(r.read())
-    except: return None
+            data = r.read()
+            # Check if we actually got data
+            if not data:
+                xbmcgui.Dialog().ok("Error", "Server returned no data.")
+                return None
+            return json.loads(data)
+    except json.JSONDecodeError as e:
+        xbmcgui.Dialog().ok("JSON Error", "The builds file has a syntax error:", str(e))
+        log(f"JSON Error: {e}")
+        return None
+    except Exception as e:
+        xbmcgui.Dialog().ok("Connection Error", "Could not connect to builds server.", str(e))
+        log(f"Connection Error: {e}")
+        return None
 
 def smart_fresh_start(silent=False):
     if not silent:
@@ -49,7 +64,7 @@ def install_build(url, name):
     dp.create("CordCutter Wizard", "Downloading Build...", "Please Wait")
 
     try:
-        # 1. DOWNLOAD (Using download_url from your JSON)
+        # 1. DOWNLOAD
         ctx = ssl.create_default_context()
         ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
         with urllib.request.urlopen(url, context=ctx) as r, open(zip_path, 'wb') as f:
@@ -60,14 +75,22 @@ def install_build(url, name):
                 if not chunk: break
                 f.write(chunk)
                 count += len(chunk)
-                dp.update(int(count*100/total), "Downloading...", f"{int(count/1024/1024)}MB / {int(total/1024/1024)}MB")
+                if total > 0:
+                    percent = int(count * 100 / total)
+                    dp.update(percent, "Downloading...", f"{int(count/1024/1024)}MB / {int(total/1024/1024)}MB")
+                else:
+                    dp.update(0, "Downloading...", f"{int(count/1024/1024)}MB")
 
-        # 2. EXTRACTION (Android-Safe Loop)
+        # 2. EXTRACTION
         with zipfile.ZipFile(zip_path, "r") as zf:
             files = zf.infolist()
             for i, file in enumerate(files):
                 if i % 50 == 0: dp.update(int(i*100/len(files)), "Installing Files...", file.filename[:35])
                 target = os.path.join(home, file.filename)
+                
+                # Safety check for Zip Slip (security)
+                if not os.path.normpath(target).startswith(os.path.normpath(home)): continue
+
                 if file.is_dir():
                     if not os.path.exists(target): os.makedirs(target, exist_ok=True)
                 else:
@@ -75,8 +98,7 @@ def install_build(url, name):
                     if not os.path.exists(parent): os.makedirs(parent, exist_ok=True)
                     with open(target, "wb") as f_out: f_out.write(zf.read(file))
 
-        # 3. BINARY SANITIZATION (Critical for Windows -> Android)
-        # We delete the addon folders for these so Android reinstalls the correct version
+        # 3. BINARY SANITIZATION
         dp.update(98, "Cleaning up...", "Removing Windows binaries")
         binaries = ['pvr.iptvsimple', 'inputstream.adaptive', 'inputstream.ffmpegdirect', 'inputstream.rtmp']
         for b in binaries:
@@ -89,12 +111,13 @@ def install_build(url, name):
         with open(TRIGGER_FILE, "w") as f: f.write("active")
         
         dp.close()
-        xbmcgui.Dialog().ok("Success", "CordCutter Base Installed!", "Kodi will now close.", "Relaunch to finish IPTV setup.")
+        xbmcgui.Dialog().ok("Success", "Build Installed!", "Kodi will now close.", "Relaunch to finish setup.")
         os._exit(1)
 
     except Exception as e:
         dp.close()
-        xbmcgui.Dialog().ok("Error", str(e))
+        xbmcgui.Dialog().ok("Error", f"Installation Failed: {str(e)}")
+        log(f"Install Error: {e}")
 
 def main():
     manifest = get_json(MANIFEST_URL)
@@ -105,14 +128,15 @@ def main():
     
     if choice == 0:
         builds = manifest.get('builds', [])
-        # Matches your JSON labels
-        names = [f"{b['name']} (v{b['version']})" for b in builds]
+        # Added safety .get() to prevent crashes if keys are missing
+        names = [f"{b.get('name', 'Unknown')} (v{b.get('version', '?')})" for b in builds]
         sel = xbmcgui.Dialog().select("Select Build", names)
         if sel != -1:
-            # Passes download_url from your JSON
-            install_build(builds[sel]['download_url'], builds[sel]['name'])
+            install_build(builds[sel]['download_url'], builds[sel].get('name', 'Build'))
     elif choice == 1:
-        if smart_fresh_start(): os._exit(1)
+        if smart_fresh_start():
+            xbmcgui.Dialog().ok("Done", "Fresh Start Complete. Restarting...")
+            os._exit(1)
 
 if __name__ == '__main__':
     main()
