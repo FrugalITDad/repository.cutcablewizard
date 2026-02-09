@@ -1,42 +1,64 @@
-import xbmc, xbmcaddon, xbmcvfs, os, xbmcgui
+import xbmc, xbmcaddon, xbmcvfs, os, xbmcgui, json
 
 ADDON = xbmcaddon.Addon()
-ADDON_ID = 'plugin.program.cutcablewizard'
 ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
 TRIGGER_FILE = os.path.join(ADDON_DATA, 'trigger.txt')
+SKIN_ID = 'skin.aeonnox.silvo'
+
+def first_run_setup():
+    """Interactive sequence for user customization."""
+    dialog = xbmcgui.Dialog()
+    
+    # 1. DEVICE NAME
+    if dialog.yesno("Setup: Device Name", "Would you like to give this device a name?", "Required for AirPlay/UPnP."):
+        name = dialog.input("Enter Device Name", defaultt="Living Room Firestick")
+        if name:
+            xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"services.devicename","value":"%s"},"id":1}' % name)
+
+    # 2. TRAKT
+    if dialog.yesno("Setup: Trakt", "Do you want to authorize Trakt now?", "Syncs your movie and show progress."):
+        # Opens the Trakt addon settings/authorization
+        xbmc.executebuiltin('RunAddon(script.trakt)')
+        dialog.ok("Trakt", "Please follow the on-screen prompts to authorize.")
+
+    # 3. SUBTITLES
+    if dialog.yesno("Setup: Subtitles", "Would you like to configure your preferred subtitle services?"):
+        xbmc.executebuiltin('ActivateWindow(SubtitlesSettings)')
+        dialog.ok("Subtitles", "Select your default services, then press back to continue setup.")
+
+    # 4. WEATHER
+    if dialog.yesno("Setup: Weather", "Would you like to set your location for the Weather?"):
+        xbmc.executebuiltin('ActivateWindow(WeatherSettings)')
+
+    dialog.ok("Wizard", "Setup Complete! Enjoy your build.")
 
 def run_post_install():
-    # Wait for Kodi to initialize fully
     monitor = xbmc.Monitor()
-    if monitor.waitForAbort(5): return
-
-    # Check if we just installed a build
+    if monitor.waitForAbort(30): return # Wait 30s for Android to settle
     if not os.path.exists(TRIGGER_FILE): return
 
-    xbmcgui.Dialog().notification("CutCable Wizard", "Finishing Setup...", xbmcgui.NOTIFICATION_INFO, 5000)
-    
-    # 1. Force update repos
+    # --- STEP 1: SKIN ENFORCEMENT ---
     xbmc.executebuiltin('UpdateLocalAddons')
-    xbmc.executebuiltin('UpdateAddonRepos')
-    
-    # 2. Switch Skin (Try up to 5 times)
-    target_skin = 'skin.aeonnox.silvo' # CHANGE THIS to your skin ID
-    
-    for i in range(5):
-        current = xbmc.getSkinDir()
-        if current == target_skin:
-            xbmcgui.Dialog().notification("Success", "Skin Loaded!", xbmcgui.NOTIFICATION_INFO, 3000)
+    skin_applied = False
+    for i in range(10):
+        if xbmc.getSkinDir() == SKIN_ID: 
+            skin_applied = True
             break
-            
-        # Send command to switch
-        xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"lookandfeel.skin","value":"%s"},"id":1}' % target_skin)
-        xbmc.sleep(2000)
-        
-        # Blindly click "Yes" (ID 11) to confirm "Keep this change?" dialog
+        xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"lookandfeel.skin","value":"%s"},"id":1}' % SKIN_ID)
         xbmc.executebuiltin('SendClick(11)') 
-        xbmc.sleep(3000)
+        xbmc.sleep(4000)
 
-    # 3. Cleanup
+    # --- STEP 2: CLEANUP HANDCUFFS ---
+    adv = xbmcvfs.translatePath("special://userdata/advancedsettings.xml")
+    if os.path.exists(adv):
+        try: os.remove(adv)
+        except: pass
+
+    # --- STEP 3: RUN SETUP IF SKIN IS READY ---
+    if skin_applied:
+        first_run_setup()
+
+    # --- FINAL CLEANUP ---
     try: os.remove(TRIGGER_FILE)
     except: pass
 
