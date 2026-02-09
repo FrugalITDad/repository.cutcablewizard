@@ -1,42 +1,49 @@
-import xbmc, xbmcaddon, xbmcvfs, os, xbmcgui
+import xbmc, xbmcaddon, xbmcvfs, os, xbmcgui, json
 
 ADDON = xbmcaddon.Addon()
+ADDON_ID = ADDON.getAddonInfo('id')
 ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
 TRIGGER_FILE = os.path.join(ADDON_DATA, 'firstrun.txt')
 
-def run_dependencies():
+def run_activation():
     monitor = xbmc.Monitor()
-    if monitor.waitForAbort(20): return # Give Kodi time to connect to Wi-Fi
+    # Wait 30 seconds for Fire Stick to rebuild Addons.db
+    if monitor.waitForAbort(30): return 
 
-    xbmcgui.Dialog().notification("CordCutter", "Finalizing IPTV Components...", xbmcgui.NOTIFICATION_INFO, 5000)
+    xbmcgui.Dialog().notification("CordCutter", "Activating Build Components...", xbmcgui.NOTIFICATION_INFO, 5000)
     
-    # 1. Force Kodi to refresh its repository list
+    # 1. Update Check (Force Kodi to check for new Wizard version)
     xbmc.executebuiltin('UpdateAddonRepos')
-    xbmc.executebuiltin('UpdateLocalAddons')
     xbmc.sleep(2000)
+    xbmc.executebuiltin(f'InstallAddon({ADDON_ID})')
 
-    deps = [
-        'inputstream.adaptive', 
-        'inputstream.ffmpegdirect', 
-        'inputstream.rtmp',
-        'pvr.iptvsimple'
-    ]
+    # 2. Mass Enable All Addons (Fixes "Disabled" state after DB nuke)
+    query = '{"jsonrpc":"2.0","method":"Addons.GetAddons","params":{"enabled":false},"id":1}'
+    response = xbmc.executeJSONRPC(query)
+    data = json.loads(response)
     
+    if 'result' in data and 'addons' in data['result']:
+        for item in data['result']['addons']:
+            aid = item['addonid']
+            xbmc.executebuiltin(f'EnableAddon("{aid}")')
+            xbmc.sleep(200)
+
+    # 3. Restore Binary Addons from Repo (Official Android versions)
+    deps = ['pvr.iptvsimple', 'inputstream.adaptive', 'inputstream.ffmpegdirect', 'inputstream.rtmp']
     for d in deps:
-        # This command attempts to install from the repo if missing, or enable if present
         xbmc.executebuiltin(f'InstallAddon("{d}")')
-        xbmc.sleep(1000)
+        xbmc.sleep(500)
 
-    # 2. Trigger IPTV Merge
-    if os.path.exists(xbmcvfs.translatePath('special://home/addons/plugin.video.iptvmerge')):
-        xbmc.executebuiltin('RunAddon(plugin.video.iptvmerge, "merge")')
+    # 4. Set the Skin (Forces the UI to switch)
+    xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"lookandfeel.skin","value":"skin.aeon.nox.silvo"},"id":1}')
+
+    # 5. Clean up
+    if os.path.exists(TRIGGER_FILE):
+        try: os.remove(TRIGGER_FILE)
+        except: pass
     
-    # 3. Cleanup trigger
-    try: os.remove(TRIGGER_FILE)
-    except: pass
-    
-    xbmcgui.Dialog().ok("Wizard", "IPTV Components Restored!\nYou may need to restart Kodi one last time.")
+    xbmcgui.Dialog().notification("CordCutter", "Build Fully Activated!", xbmcgui.NOTIFICATION_INFO, 5000)
 
 if __name__ == '__main__':
     if os.path.exists(TRIGGER_FILE):
-        run_dependencies()
+        run_activation()

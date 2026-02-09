@@ -38,7 +38,6 @@ def smart_fresh_start(silent=False):
         path = os.path.join(home, folder)
         if not os.path.exists(path): continue
         for item in os.listdir(path):
-            # Do not delete whitelisted items or essential data folders we want to clean selectively
             if item in WHITELIST or item == 'Database' or item == 'addon_data': continue
             full_path = os.path.join(path, item)
             try:
@@ -48,7 +47,6 @@ def smart_fresh_start(silent=False):
     return True
 
 def install_build(url, name):
-    # Perform a silent fresh start before installing
     if not smart_fresh_start(silent=True): return
 
     if not os.path.exists(ADDON_DATA): os.makedirs(ADDON_DATA)
@@ -56,7 +54,7 @@ def install_build(url, name):
     home = xbmcvfs.translatePath("special://home/")
 
     dp = xbmcgui.DialogProgress()
-    dp.create("CordCutter Wizard", "Preparing Installation...\nPlease Wait")
+    dp.create("CordCutter Wizard", "Downloading Build...\nPlease Wait")
 
     try:
         # 1. DOWNLOAD
@@ -83,12 +81,8 @@ def install_build(url, name):
             for i, file in enumerate(files):
                 if i % 50 == 0: 
                     dp.update(int(i*100/total_files), f"Extracting Files...\n{file.filename[:35]}")
-                
                 target = os.path.join(home, file.filename)
-                
-                # Security Check for Zip Slip
                 if not os.path.normpath(target).startswith(os.path.normpath(home)): continue
-
                 if file.is_dir():
                     if not os.path.exists(target): os.makedirs(target, exist_ok=True)
                 else:
@@ -96,16 +90,13 @@ def install_build(url, name):
                     if not os.path.exists(parent): os.makedirs(parent, exist_ok=True)
                     with open(target, "wb") as f_out: f_out.write(zf.read(file))
 
-        # 3. BINARY SANITIZATION & DATABASE CLEANUP
+        # 3. CLEANUP & DB NUKE
         dp.update(98, "Finalizing...\nCleaning Addon Database & Binaries")
-        
-        # Delete Windows-specific binary folders so Android can reinstall them
         binaries = ['pvr.iptvsimple', 'inputstream.adaptive', 'inputstream.ffmpegdirect', 'inputstream.rtmp']
         for b in binaries:
             b_path = os.path.join(home, 'addons', b)
             if os.path.exists(b_path): shutil.rmtree(b_path, ignore_errors=True)
 
-        # Delete the Addon Database to force Kodi to rebuild the library on next boot
         db_path = os.path.join(home, 'userdata', 'Database')
         if os.path.exists(db_path):
             for f in os.listdir(db_path):
@@ -113,39 +104,35 @@ def install_build(url, name):
                     try: os.remove(os.path.join(db_path, f))
                     except: pass
 
-        # 4. SETTINGS & TRIGGER
-        # Enable Unknown Sources via JSON-RPC
+        # 4. PRE-REBOOT BOOTSTRAP
+        # Enable Unknown Sources
         xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"addons.unknownsources","value":true},"id":1}')
+        # FORCE ENABLE WIZARD (Crucial so service.py runs on reboot)
+        xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Addons.SetAddonEnabled","params":{"addonid":"%s","enabled":true},"id":1}' % ADDON_ID)
 
-        # Write the trigger file for service.py to catch on reboot
         with open(TRIGGER_FILE, "w") as f: f.write("active")
         
         dp.close()
-        xbmcgui.Dialog().ok("Success", "CordCutter Build Installed!\n\nKodi will now close. Restart Kodi to\nfinalize IPTV and dependency setup.")
+        xbmcgui.Dialog().ok("Success", "Build Installed!\nKodi will now close.\nUpon relaunch, wait 30s for activation.")
         os._exit(1)
 
     except Exception as e:
         dp.close()
         xbmcgui.Dialog().ok("Error", f"Installation Failed:\n{str(e)}")
-        log(f"Install Error: {e}")
 
 def main():
     manifest = get_json(MANIFEST_URL)
     if not manifest: return
-    
-    options = ["Install CordCutter Build", "Fresh Start (Wipe Kodi)"]
+    options = ["Install Build", "Fresh Start Only"]
     choice = xbmcgui.Dialog().select("CutCableWizard", options)
-    
     if choice == 0:
         builds = manifest.get('builds', [])
         names = [f"{b.get('name', 'Unknown')} (v{b.get('version', '?')})" for b in builds]
-        sel = xbmcgui.Dialog().select("Select Your Build", names)
+        sel = xbmcgui.Dialog().select("Select Build", names)
         if sel != -1:
             install_build(builds[sel]['download_url'], builds[sel].get('name', 'Build'))
     elif choice == 1:
-        if smart_fresh_start():
-            xbmcgui.Dialog().ok("Success", "Fresh Start Complete.\nKodi will now restart.")
-            os._exit(1)
+        if smart_fresh_start(): os._exit(1)
 
 if __name__ == '__main__':
     main()
