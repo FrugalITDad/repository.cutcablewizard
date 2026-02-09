@@ -1,29 +1,35 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <addon id="plugin.program.cutcablewizard"
        name="CutCableWizard"
-       version="1.6.8"
+       version="1.7.0"
        provider-name="FrugalITDad">
     <requires>
         <import addon="xbmc.python" version="3.0.0" />
+        <import addon="pvr.iptvsimple" />
+        <import addon="inputstream.adaptive" />
+        <import addon="inputstream.ffmpegdirect" />
+        <import addon="inputstream.rtmp" />
+        <import addon="script.trakt" optional="true" />
+        <import addon="plugin.video.iptvmerge" optional="true" />
     </requires>
     
-    <extension point="xbmc.python.pluginsource"
-               library="default.py">
+    <extension point="xbmc.python.pluginsource" library="default.py">
         <provides>executable</provides>
     </extension>
 
-    <extension point="xbmc.service" 
-               library="service.py" 
-               start="startup" />
+    <extension point="xbmc.service" library="service.py" start="startup" />
 
     <extension point="xbmc.addon.metadata">
         <summary lang="en_US">CordCutter builds wizard</summary>
         <description lang="en_US">
-            Installs and manages CordCutter builds:
-            cordcutter_base, cordcutter_pro, cordcutter_plus,
-            cordcutter_basegaming, cordcutter_progaming,
-            cordcutter_plusgaming, cordcutter_admin.
+            Installs and manages CordCutter builds optimized for Fire Stick migration. 
+            Includes auto-sanitization for PVR and InputStream binaries.
         </description>
         <platform>all</platform>
         <language>en_US</language>
+        <assets>
+            <icon>icon.png</icon>
+            <fanart>fanart.jpg</fanart>
+        </assets>
     </extension>
 </addon>
