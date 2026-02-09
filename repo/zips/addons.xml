@@ -23,7 +23,7 @@
     <!-- Wizard add-on -->
     <addon id="plugin.program.cutcablewizard" 
            name="CutCableWizard" 
-           version="1.5.9" 
+           version="1.6.0" 
            provider-name="FrugalITDad">
         <requires>
             <import addon="xbmc.python" version="3.0.0"/>
