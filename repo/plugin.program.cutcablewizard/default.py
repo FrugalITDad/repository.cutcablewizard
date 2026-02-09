@@ -22,18 +22,10 @@ def get_json(url):
         req = urllib.request.Request(url, headers={'User-Agent': 'Kodi-Wizard/1.1'})
         with urllib.request.urlopen(req, context=ctx) as r:
             data = r.read()
-            # Check if we actually got data
-            if not data:
-                xbmcgui.Dialog().ok("Error", "Server returned no data.")
-                return None
+            if not data: return None
             return json.loads(data)
-    except json.JSONDecodeError as e:
-        xbmcgui.Dialog().ok("JSON Error", "The builds file has a syntax error:", str(e))
-        log(f"JSON Error: {e}")
-        return None
     except Exception as e:
-        xbmcgui.Dialog().ok("Connection Error", "Could not connect to builds server.", str(e))
-        log(f"Connection Error: {e}")
+        xbmcgui.Dialog().ok("Connection Error", str(e))
         return None
 
 def smart_fresh_start(silent=False):
@@ -61,7 +53,8 @@ def install_build(url, name):
     home = xbmcvfs.translatePath("special://home/")
 
     dp = xbmcgui.DialogProgress()
-    dp.create("CordCutter Wizard", "Downloading Build...", "Please Wait")
+    # FIX 1: Combined 3 args into 2 using \n
+    dp.create("CordCutter Wizard", "Downloading Build...\nPlease Wait")
 
     try:
         # 1. DOWNLOAD
@@ -77,18 +70,23 @@ def install_build(url, name):
                 count += len(chunk)
                 if total > 0:
                     percent = int(count * 100 / total)
-                    dp.update(percent, "Downloading...", f"{int(count/1024/1024)}MB / {int(total/1024/1024)}MB")
+                    # FIX 2: Combined 3 args into 2 using \n
+                    dp.update(percent, f"Downloading...\n{int(count/1024/1024)}MB / {int(total/1024/1024)}MB")
                 else:
-                    dp.update(0, "Downloading...", f"{int(count/1024/1024)}MB")
+                    dp.update(0, f"Downloading...\n{int(count/1024/1024)}MB")
 
         # 2. EXTRACTION
         with zipfile.ZipFile(zip_path, "r") as zf:
             files = zf.infolist()
+            total_files = len(files)
             for i, file in enumerate(files):
-                if i % 50 == 0: dp.update(int(i*100/len(files)), "Installing Files...", file.filename[:35])
+                # FIX 3: Combined 3 args into 2 using \n
+                if i % 50 == 0: 
+                    dp.update(int(i*100/total_files), f"Installing Files...\n{file.filename[:35]}")
+                
                 target = os.path.join(home, file.filename)
                 
-                # Safety check for Zip Slip (security)
+                # Security Check
                 if not os.path.normpath(target).startswith(os.path.normpath(home)): continue
 
                 if file.is_dir():
@@ -99,7 +97,8 @@ def install_build(url, name):
                     with open(target, "wb") as f_out: f_out.write(zf.read(file))
 
         # 3. BINARY SANITIZATION
-        dp.update(98, "Cleaning up...", "Removing Windows binaries")
+        # FIX 4: Combined args
+        dp.update(98, "Cleaning up...\nRemoving Windows binaries")
         binaries = ['pvr.iptvsimple', 'inputstream.adaptive', 'inputstream.ffmpegdirect', 'inputstream.rtmp']
         for b in binaries:
             b_path = os.path.join(home, 'addons', b)
@@ -111,12 +110,13 @@ def install_build(url, name):
         with open(TRIGGER_FILE, "w") as f: f.write("active")
         
         dp.close()
-        xbmcgui.Dialog().ok("Success", "Build Installed!", "Kodi will now close.", "Relaunch to finish setup.")
+        # FIX 5: Dialog().ok() also takes (heading, message)
+        xbmcgui.Dialog().ok("Success", "Build Installed!\nKodi will now close.\nRelaunch to finish setup.")
         os._exit(1)
 
     except Exception as e:
         dp.close()
-        xbmcgui.Dialog().ok("Error", f"Installation Failed: {str(e)}")
+        xbmcgui.Dialog().ok("Error", f"Installation Failed:\n{str(e)}")
         log(f"Install Error: {e}")
 
 def main():
@@ -128,14 +128,13 @@ def main():
     
     if choice == 0:
         builds = manifest.get('builds', [])
-        # Added safety .get() to prevent crashes if keys are missing
         names = [f"{b.get('name', 'Unknown')} (v{b.get('version', '?')})" for b in builds]
         sel = xbmcgui.Dialog().select("Select Build", names)
         if sel != -1:
             install_build(builds[sel]['download_url'], builds[sel].get('name', 'Build'))
     elif choice == 1:
         if smart_fresh_start():
-            xbmcgui.Dialog().ok("Done", "Fresh Start Complete. Restarting...")
+            xbmcgui.Dialog().ok("Done", "Fresh Start Complete.\nRestarting...")
             os._exit(1)
 
 if __name__ == '__main__':
