@@ -1,5 +1,5 @@
 import xbmc, xbmcaddon, xbmcgui, xbmcvfs
-import urllib.request, os, json, ssl, zipfile, shutil, re, sqlite3
+import urllib.request, os, json, ssl, zipfile, shutil
 
 # --- CONFIG ---
 ADDON = xbmcaddon.Addon()
@@ -21,65 +21,52 @@ def smart_fresh_start(silent=False):
     if not silent:
         if not xbmcgui.Dialog().yesno("Fresh Start", "Wipe all builds but KEEP Wizard and Repo?"):
             return False
-    
     home = xbmcvfs.translatePath("special://home/")
-    addons_path = os.path.join(home, 'addons')
-    userdata_path = os.path.join(home, 'userdata')
-    keep = [ADDON_ID, REPO_ID, 'packages', 'temp']
-    
-    dp = xbmcgui.DialogProgress()
-    dp.create("Wizard", "Cleaning System...")
-    
-    try:
-        # Clean Addons
-        for folder in os.listdir(addons_path):
-            if folder not in keep:
-                shutil.rmtree(os.path.join(addons_path, folder), ignore_errors=True)
-        # Clean Userdata
-        for folder in os.listdir(userdata_path):
-            if folder not in ['addon_data', 'Database']:
-                shutil.rmtree(os.path.join(userdata_path, folder), ignore_errors=True)
-        
-        # Reset Unknown Sources
-        xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"addons.unknownsources","value":true},"id":1}')
-        dp.close()
-        return True
-    except:
-        dp.close()
-        return False
+    for folder in ['addons', 'userdata']:
+        path = os.path.join(home, folder)
+        if not os.path.exists(path): continue
+        for item in os.listdir(path):
+            item_path = os.path.join(path, item)
+            if item not in [ADDON_ID, REPO_ID, 'addon_data', 'Database', 'packages']:
+                if os.path.isdir(item_path): shutil.rmtree(item_path, ignore_errors=True)
+                else: os.remove(item_path)
+    return True
 
 def install_build(url, build_id, version):
-    # 1. Ask for Fresh Start first (Recommended for Android)
-    do_fresh = xbmcgui.Dialog().yesno("Build Install", "Perform Fresh Start before installing? (Recommended)")
-    if do_fresh:
-        smart_fresh_start(silent=True)
+    do_fresh = xbmcgui.Dialog().yesno("Build Install", "Perform Fresh Start first? (Recommended)")
+    if do_fresh: smart_fresh_start(silent=True)
 
     path = os.path.join(ADDON_DATA, "temp.zip")
     dp = xbmcgui.DialogProgress()
-    dp.create("CutCable Wizard", "Downloading...")
+    dp.create("CutCable Wizard", "Downloading Build...", "Please wait...")
     
     try:
-        # Download
-        urllib.request.urlretrieve(url, path, lambda nb, bs, fs: dp.update(int(nb*bs*100/fs)))
+        # DOWNLOAD WITH PROGRESS
+        urllib.request.urlretrieve(url, path, lambda nb, bs, fs: dp.update(int(nb*bs*100/fs), "Downloading Build...", f"Transferred: {int(nb*bs/1024/1024)}MB / {int(fs/1024/1024)}MB"))
         
-        # Extract
-        dp.update(0, "Extracting Build...")
+        # EXTRACT WITH PROGRESS
         home = xbmcvfs.translatePath("special://home/")
         with zipfile.ZipFile(path, "r") as zf:
-            zf.extractall(home)
-        
-        # 2. Force Skin via AdvancedSettings
+            list = zf.infolist()
+            total_files = len(list)
+            for i, file in enumerate(list):
+                # Update every 5 files to keep the UI smooth but fast
+                if i % 5 == 0:
+                    percent = int((i / total_files) * 100)
+                    dp.update(percent, "Extracting Build...", f"File: {file.filename[:40]}")
+                zf.extract(file, home)
+
+        # FORCE CONFIGS
         adv_file = xbmcvfs.translatePath("special://userdata/advancedsettings.xml")
         with open(adv_file, "w") as f:
             f.write('<advancedsettings><lookandfeel><skin>skin.aeonnox.silvo</skin></lookandfeel></advancedsettings>')
 
-        # 3. Write Trigger for Service
         if not os.path.exists(ADDON_DATA): os.makedirs(ADDON_DATA)
         with open(TRIGGER_FILE, "w") as f: f.write("active")
         ADDON.setSetting(f"ver_{build_id}", version)
 
         dp.close()
-        xbmcgui.Dialog().ok("Complete", "Build Installed! Restart Kodi and WAIT 20 seconds for the skin to load.")
+        xbmcgui.Dialog().ok("Complete", "Build Installed! Restart Kodi and WAIT 30 seconds for the skin to flip.")
         os._exit(1)
     except Exception as e:
         dp.close()
@@ -88,20 +75,14 @@ def install_build(url, build_id, version):
 def main():
     options = ["Install Build", "Smart Fresh Start"]
     choice = xbmcgui.Dialog().select("CutCable Wizard", options)
-    
     if choice == 0:
         manifest = get_json(MANIFEST_URL)
-        if not manifest: return
-        builds = manifest.get("builds", [])
-        names = [f"{b['name']} (v{b['version']})" for b in builds]
-        b_choice = xbmcgui.Dialog().select("Select Build", names)
-        if b_choice != -1:
-            sel = builds[b_choice]
-            install_build(sel['download_url'], sel['id'], sel['version'])
+        if manifest:
+            builds = manifest.get("builds", [])
+            names = [f"{b['name']} (v{b['version']})" for b in builds]
+            b_choice = xbmcgui.Dialog().select("Select Build", names)
+            if b_choice != -1: install_build(builds[b_choice]['download_url'], builds[b_choice]['id'], builds[b_choice]['version'])
     elif choice == 1:
-        if smart_fresh_start():
-            xbmcgui.Dialog().ok("Done", "Kodi cleaned. Restarting...")
-            os._exit(1)
+        if smart_fresh_start(): os._exit(1)
 
-if __name__ == '__main__':
-    main()
+if __name__ == '__main__': main()
