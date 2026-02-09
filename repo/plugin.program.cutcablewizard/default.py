@@ -21,7 +21,7 @@ def get_json(url):
     except: return None
 
 def smart_fresh_start():
-    if not xbmcgui.Dialog().yesno("Smart Fresh Start", "Wipe everything but KEEP Wizard and Repo?"):
+    if not xbmcgui.Dialog().yesno(ADDON_NAME, "Wipe everything but KEEP Wizard and Repo?"):
         return
     home = xbmcvfs.translatePath("special://home/")
     addons_path = os.path.join(home, 'addons')
@@ -38,8 +38,7 @@ def smart_fresh_start():
                 shutil.rmtree(os.path.join(userdata_path, folder), ignore_errors=True)
         xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"addons.unknownsources","value":true},"id":1}')
         dp.close()
-        xbmcgui.Dialog().ok("Done", "Cleaned. Restarting...")
-        os._exit(1)
+        xbmc.executebuiltin('RestartApp') # Better for Android than os._exit
     except: dp.close()
 
 def install_build(zip_path, build_id, version):
@@ -73,22 +72,22 @@ def install_build(zip_path, build_id, version):
             with open(gui_xml, 'w', encoding='utf-8') as f:
                 f.write(xml_data)
 
-        # 3. FORCE ENABLE CRITICAL ADDONS VIA JSON
-        for a_id in [REPO_ID, ADDON_ID, 'skin.aeonnox.silvo']:
-            xbmc.executeJSONRPC(f'{{"jsonrpc":"2.0","method":"Addons.SetAddonEnabled","params":{{"addonid":"{a_id}","enabled":true}},"id":1}}')
-
-        # 4. FINALIZE
+        # 3. TRIGGER SETTINGS
         if not os.path.exists(ADDON_DATA): os.makedirs(ADDON_DATA)
         with open(TRIGGER_FILE, "w") as f: f.write("active")
         ADDON.setSetting(f"ver_{build_id}", version)
         
+        dp.close()
+        xbmcgui.Dialog().ok("Success", "Build Applied! Kodi will now restart to save all settings.")
+        
+        # 4. THE CLEAN EXIT
         xbmc.executebuiltin('UpdateAddonRepos')
         xbmc.executebuiltin('UpdateLocalAddons')
+        xbmc.sleep(2000)
+        xbmc.executebuiltin('RestartApp') # Specifically for FireSticks/Android
+        xbmc.sleep(2000)
+        os._exit(1) # Fallback if RestartApp isn't supported by the skin
         
-        dp.close()
-        xbmcgui.Dialog().ok("Success", "Build Applied! Restarting Kodi...")
-        xbmc.sleep(5000) 
-        os._exit(1)
     except Exception as e:
         if dp: dp.close()
         xbmcgui.Dialog().ok("Error", str(e))
