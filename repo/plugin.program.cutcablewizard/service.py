@@ -5,8 +5,7 @@ ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
 TRIGGER_FILE = os.path.join(ADDON_DATA, 'trigger.txt')
 
 def run_enforcer():
-    # 1. Force Enable All Addons via JSON-RPC
-    # This addresses the 'disabled' addons issue
+    # 1. Global Enable Addons
     query = {"jsonrpc": "2.0", "id": 1, "method": "Addons.GetAddons", "params": {"installed": True, "enabled": False}}
     try:
         result = json.loads(xbmc.executeJSONRPC(json.dumps(query)))
@@ -16,17 +15,17 @@ def run_enforcer():
                 xbmc.executebuiltin(f'EnableAddon("{a_id}")')
     except: pass
 
-    # 2. Confirm Skin Switch
+    # 2. Confirm Skin Switch (Clicks 'Yes' on hidden prompt)
     xbmc.executebuiltin('SendClick(11)') 
     xbmc.executebuiltin('SetProperty(reloadsmooth,true,home)')
 
-    # 3. Cleanup AdvancedSettings (Remove the force-skin block)
+    # 3. Clean AdvancedSettings (Remove the force-skin block)
     adv_file = xbmcvfs.translatePath("special://userdata/advancedsettings.xml")
     if os.path.exists(adv_file):
         try: os.remove(adv_file)
         except: pass
     
-    # 4. Final PVR/IPTV Refresh
+    # 4. PVR Refresh
     if os.path.exists(xbmcvfs.translatePath('special://home/addons/plugin.video.iptvmerge')):
         xbmc.executebuiltin('RunAddon(plugin.video.iptvmerge, "merge")')
     xbmc.executebuiltin('UpdatePVRByAddon(pvr.iptvsimple)')
@@ -37,7 +36,7 @@ def run_enforcer():
 
 if __name__ == '__main__':
     monitor = xbmc.Monitor()
-    # Wait 20 seconds for the GUI to fully load on the Fire Stick
+    # Wait for Kodi to initialize
     if monitor.waitForAbort(20): exit()
     
     if os.path.exists(TRIGGER_FILE):
