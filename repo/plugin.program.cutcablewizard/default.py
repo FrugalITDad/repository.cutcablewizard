@@ -5,7 +5,6 @@ import urllib.request, os, json, ssl, zipfile, shutil
 ADDON       = xbmcaddon.Addon()
 ADDON_ID    = ADDON.getAddonInfo('id')
 ADDON_DATA  = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
-# Files used to coordinate between Service and Wizard
 TRIGGER_FILE = os.path.join(ADDON_DATA, 'firstrun.txt')
 UPDATE_FILE  = os.path.join(ADDON_DATA, 'update_pending.json')
 VERSION_FILE = os.path.join(ADDON_DATA, 'local_version.txt')
@@ -23,68 +22,40 @@ def get_json(url):
             return json.loads(r.read())
     except: return None
 
-# --- SMART DATA RETENTION ---
 def backup_user_data():
-    """Saves Trakt, Debrid, Favorites, and Sources before a wipe"""
     if os.path.exists(BACKUP_PATH): shutil.rmtree(BACKUP_PATH)
-    os.makedirs(BACKUP_PATH)
-    
+    os.makedirs(BACKUP_PATH, exist_ok=True)
     home = xbmcvfs.translatePath("special://home/")
-    
-    # 1. Key XML Files
     for xml in ['favourites.xml', 'sources.xml']:
         src = os.path.join(home, 'userdata', xml)
         if os.path.exists(src): shutil.copy(src, BACKUP_PATH)
-
-    # 2. Addon Data (Trakt, ResolveURL/Debrid, Elementum, Fen, etc.)
-    # We backup the full directories to keep logins intact
     ud_addon_data = os.path.join(home, 'userdata', 'addon_data')
-    targets = ['script.trakt', 'script.module.resolveurl', 'plugin.video.fen', 'plugin.video.seren', 'plugin.video.umbrella']
-    
+    targets = ['script.trakt', 'script.module.resolveurl', 'plugin.video.fen', 'plugin.video.seren']
     if os.path.exists(ud_addon_data):
         for item in os.listdir(ud_addon_data):
-            if item in targets or item.startswith('plugin.video'):
+            if item in targets:
                 src = os.path.join(ud_addon_data, item)
                 dst = os.path.join(BACKUP_PATH, item)
                 if os.path.isdir(src): shutil.copytree(src, dst)
 
-    # 3. Save Device Name
-    name = xbmc.getInfoLabel('System.FriendlyName')
-    with open(os.path.join(BACKUP_PATH, 'device_name.txt'), 'w') as f: f.write(name)
-
 def restore_user_data():
-    """Restores the saved data after install"""
     if not os.path.exists(BACKUP_PATH): return
     home = xbmcvfs.translatePath("special://home/")
     ud_addon_data = os.path.join(home, 'userdata', 'addon_data')
-    
-    # 1. Restore XMLs
     for f in os.listdir(BACKUP_PATH):
         if f.endswith('.xml'):
             shutil.copy(os.path.join(BACKUP_PATH, f), os.path.join(home, 'userdata', f))
-            
-    # 2. Restore Addon Data folders
     for item in os.listdir(BACKUP_PATH):
         src = os.path.join(BACKUP_PATH, item)
         if os.path.isdir(src):
             dst = os.path.join(ud_addon_data, item)
-            if os.path.exists(dst): shutil.rmtree(dst) # Overwrite build default with user data
+            if os.path.exists(dst): shutil.rmtree(dst)
             shutil.copytree(src, dst)
-            
-    # 3. Restore Device Name
-    name_file = os.path.join(BACKUP_PATH, 'device_name.txt')
-    if os.path.exists(name_file):
-        with open(name_file, 'r') as f: name = f.read()
-        xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"services.devicename","value":"%s"},"id":1}' % name)
-    
-    # Cleanup
     shutil.rmtree(BACKUP_PATH, ignore_errors=True)
 
-# --- INSTALLATION LOGIC ---
 def smart_fresh_start(silent=False):
     if not silent:
         if not xbmcgui.Dialog().yesno("Fresh Start", "Wipe setup but keep Wizard?"): return False
-    
     home = xbmcvfs.translatePath("special://home/")
     for folder in ['addons', 'userdata']:
         path = os.path.join(home, folder)
@@ -99,10 +70,11 @@ def smart_fresh_start(silent=False):
     return True
 
 def install_build(url, name, version, keep_data=False):
-    if keep_data:
-        xbmcgui.Dialog().notification("Wizard", "Backing up Settings...", xbmcgui.NOTIFICATION_INFO, 3000)
-        backup_user_data()
+    # ENSURE DIRECTORY EXISTS (The Fix for your Error)
+    if not xbmcvfs.exists(ADDON_DATA):
+        xbmcvfs.mkdirs(ADDON_DATA)
 
+    if keep_data: backup_user_data()
     if not smart_fresh_start(silent=True): return
 
     zip_path = os.path.join(ADDON_DATA, "temp.zip")
@@ -134,29 +106,19 @@ def install_build(url, name, version, keep_data=False):
                     os.makedirs(os.path.dirname(target), exist_ok=True)
                     with open(target, "wb") as f_out: f_out.write(zf.read(file))
 
-        if keep_data:
-            dp.update(95, "Restoring Settings...")
-            restore_user_data()
-
-        # Save Version Info
+        if keep_data: restore_user_data()
         with open(VERSION_FILE, 'w') as f: f.write(str(version))
-        
-        # Trigger First Run
         with open(TRIGGER_FILE, "w") as f: f.write("setup_pending")
-        
-        # Clean Update trigger
         if os.path.exists(UPDATE_FILE): os.remove(UPDATE_FILE)
 
         dp.close()
         xbmcgui.Dialog().ok("Success", "Build Updated!\nKodi will now close.")
         os._exit(1)
-
     except Exception as e:
-        dp.close()
-        xbmcgui.Dialog().ok("Error", str(e))
+        if dp: dp.close()
+        xbmcgui.Dialog().ok("Error", f"Failed: {str(e)}")
 
 def main():
-    # 1. CHECK FOR PENDING UPDATE FROM SERVICE.PY
     if os.path.exists(UPDATE_FILE):
         try:
             with open(UPDATE_FILE, 'r') as f: update_info = json.load(f)
@@ -164,7 +126,6 @@ def main():
             return
         except: pass
 
-    # 2. STANDARD MENU
     manifest = get_json(MANIFEST_URL)
     if not manifest: return
     choice = xbmcgui.Dialog().select("CordCutter Wizard", ["Install Build", "Fresh Start"])
@@ -172,9 +133,7 @@ def main():
         builds = manifest.get('builds', [])
         names = [f"{b['name']} (v{b['version']})" for b in builds]
         sel = xbmcgui.Dialog().select("Select Build", names)
-        if sel != -1: 
-            # Regular install - No data retention unless we want it implicitly
-            install_build(builds[sel]['download_url'], builds[sel]['name'], builds[sel]['version'], keep_data=False)
+        if sel != -1: install_build(builds[sel]['download_url'], builds[sel]['name'], builds[sel]['version'])
     elif choice == 1:
         if smart_fresh_start(): os._exit(1)
 
