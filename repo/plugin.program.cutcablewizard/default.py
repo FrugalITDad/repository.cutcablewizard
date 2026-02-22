@@ -5,6 +5,8 @@ import urllib.request, os, json, ssl, zipfile, shutil
 ADDON       = xbmcaddon.Addon()
 ADDON_ID    = ADDON.getAddonInfo('id')
 ADDON_DATA  = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
+
+# Communication Files
 TRIGGER_FILE = os.path.join(ADDON_DATA, 'firstrun.txt')
 UPDATE_FILE  = os.path.join(ADDON_DATA, 'update_pending.json')
 VERSION_FILE = os.path.join(ADDON_DATA, 'local_version.txt')
@@ -22,15 +24,20 @@ def get_json(url):
             return json.loads(r.read())
     except: return None
 
+# --- SETTINGS RETENTION ---
 def backup_user_data():
     if os.path.exists(BACKUP_PATH): shutil.rmtree(BACKUP_PATH)
     os.makedirs(BACKUP_PATH, exist_ok=True)
     home = xbmcvfs.translatePath("special://home/")
+    
+    # 1. XMLs
     for xml in ['favourites.xml', 'sources.xml']:
         src = os.path.join(home, 'userdata', xml)
         if os.path.exists(src): shutil.copy(src, BACKUP_PATH)
+    
+    # 2. Addon Logins/Settings
     ud_addon_data = os.path.join(home, 'userdata', 'addon_data')
-    targets = ['script.trakt', 'script.module.resolveurl', 'plugin.video.fen', 'plugin.video.seren']
+    targets = ['script.trakt', 'script.module.resolveurl', 'plugin.video.fen', 'plugin.video.seren', 'plugin.video.umbrella']
     if os.path.exists(ud_addon_data):
         for item in os.listdir(ud_addon_data):
             if item in targets:
@@ -53,9 +60,10 @@ def restore_user_data():
             shutil.copytree(src, dst)
     shutil.rmtree(BACKUP_PATH, ignore_errors=True)
 
+# --- ENGINE ---
 def smart_fresh_start(silent=False):
     if not silent:
-        if not xbmcgui.Dialog().yesno("Fresh Start", "Wipe setup but keep Wizard?"): return False
+        if not xbmcgui.Dialog().yesno("Fresh Start", "Wipe current setup but keep this Wizard?"): return False
     home = xbmcvfs.translatePath("special://home/")
     for folder in ['addons', 'userdata']:
         path = os.path.join(home, folder)
@@ -70,17 +78,14 @@ def smart_fresh_start(silent=False):
     return True
 
 def install_build(url, name, version, keep_data=False):
-    # ENSURE DIRECTORY EXISTS (The Fix for your Error)
-    if not xbmcvfs.exists(ADDON_DATA):
-        xbmcvfs.mkdirs(ADDON_DATA)
-
+    if not xbmcvfs.exists(ADDON_DATA): xbmcvfs.mkdirs(ADDON_DATA)
     if keep_data: backup_user_data()
     if not smart_fresh_start(silent=True): return
 
     zip_path = os.path.join(ADDON_DATA, "temp.zip")
     home = xbmcvfs.translatePath("special://home/")
     dp = xbmcgui.DialogProgress()
-    dp.create("CordCutter", f"Downloading {name}...")
+    dp.create("CordCutter Wizard", f"Downloading {name}...")
 
     try:
         ctx = ssl.create_default_context()
@@ -98,7 +103,7 @@ def install_build(url, name, version, keep_data=False):
         with zipfile.ZipFile(zip_path, "r") as zf:
             files = zf.infolist()
             for i, file in enumerate(files):
-                if i % 50 == 0: dp.update(int(i*100/len(files)), "Extracting...")
+                if i % 50 == 0: dp.update(int(i*100/len(files)), "Extracting Build Files...")
                 target = os.path.join(home, file.filename)
                 if not os.path.normpath(target).startswith(os.path.normpath(home)): continue
                 if file.is_dir(): os.makedirs(target, exist_ok=True)
@@ -112,11 +117,13 @@ def install_build(url, name, version, keep_data=False):
         if os.path.exists(UPDATE_FILE): os.remove(UPDATE_FILE)
 
         dp.close()
-        xbmcgui.Dialog().ok("Success", "Build Updated!\nKodi will now close.")
+        
+        msg = "Success! Now please:\n1. Open Kodi & wait 10 seconds.\n2. Close Kodi completely.\n3. Open Kodi AGAIN to start the Wizard Setup."
+        xbmcgui.Dialog().ok("CordCutter", msg)
         os._exit(1)
     except Exception as e:
         if dp: dp.close()
-        xbmcgui.Dialog().ok("Error", f"Failed: {str(e)}")
+        xbmcgui.Dialog().ok("Error", f"Installation Failed: {str(e)}")
 
 def main():
     if os.path.exists(UPDATE_FILE):
