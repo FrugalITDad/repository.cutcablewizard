@@ -6,7 +6,7 @@ ADDON       = xbmcaddon.Addon()
 ADDON_ID    = ADDON.getAddonInfo('id')
 ADDON_DATA  = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
 
-# Communication Files
+# Internal Tracking Files
 TRIGGER_FILE = os.path.join(ADDON_DATA, 'firstrun.txt')
 UPDATE_FILE  = os.path.join(ADDON_DATA, 'update_pending.json')
 VERSION_FILE = os.path.join(ADDON_DATA, 'local_version.txt')
@@ -24,18 +24,19 @@ def get_json(url):
             return json.loads(r.read())
     except: return None
 
-# --- SETTINGS RETENTION ---
+# --- SETTINGS RETENTION LOGIC ---
 def backup_user_data():
+    """Saves critical user data before a wipe"""
     if os.path.exists(BACKUP_PATH): shutil.rmtree(BACKUP_PATH)
     os.makedirs(BACKUP_PATH, exist_ok=True)
     home = xbmcvfs.translatePath("special://home/")
     
-    # 1. XMLs
+    # 1. Core User Files
     for xml in ['favourites.xml', 'sources.xml']:
         src = os.path.join(home, 'userdata', xml)
         if os.path.exists(src): shutil.copy(src, BACKUP_PATH)
     
-    # 2. Addon Logins/Settings
+    # 2. Addon Data (Logins/Auth)
     ud_addon_data = os.path.join(home, 'userdata', 'addon_data')
     targets = ['script.trakt', 'script.module.resolveurl', 'plugin.video.fen', 'plugin.video.seren', 'plugin.video.umbrella']
     if os.path.exists(ud_addon_data):
@@ -46,6 +47,7 @@ def backup_user_data():
                 if os.path.isdir(src): shutil.copytree(src, dst)
 
 def restore_user_data():
+    """Injects saved data back into the fresh build"""
     if not os.path.exists(BACKUP_PATH): return
     home = xbmcvfs.translatePath("special://home/")
     ud_addon_data = os.path.join(home, 'userdata', 'addon_data')
@@ -60,7 +62,7 @@ def restore_user_data():
             shutil.copytree(src, dst)
     shutil.rmtree(BACKUP_PATH, ignore_errors=True)
 
-# --- ENGINE ---
+# --- WIPE & INSTALL ---
 def smart_fresh_start(silent=False):
     if not silent:
         if not xbmcgui.Dialog().yesno("Fresh Start", "Wipe current setup but keep this Wizard?"): return False
@@ -78,7 +80,9 @@ def smart_fresh_start(silent=False):
     return True
 
 def install_build(url, name, version, keep_data=False):
+    # Ensure directory exists for Android/FireStick storage quirks
     if not xbmcvfs.exists(ADDON_DATA): xbmcvfs.mkdirs(ADDON_DATA)
+    
     if keep_data: backup_user_data()
     if not smart_fresh_start(silent=True): return
 
@@ -112,15 +116,25 @@ def install_build(url, name, version, keep_data=False):
                     with open(target, "wb") as f_out: f_out.write(zf.read(file))
 
         if keep_data: restore_user_data()
+        
+        # Mark version and trigger first-run for service.py
         with open(VERSION_FILE, 'w') as f: f.write(str(version))
         with open(TRIGGER_FILE, "w") as f: f.write("setup_pending")
         if os.path.exists(UPDATE_FILE): os.remove(UPDATE_FILE)
 
         dp.close()
         
-        msg = "Success! Now please:\n1. Open Kodi & wait 10 seconds.\n2. Close Kodi completely.\n3. Open Kodi AGAIN to start the Wizard Setup."
+        # Explicit double-relaunch instructions
+        msg = (
+            "Build Updated Successfully!\n\n"
+            "TO ACTIVATE THE WIZARD:\n"
+            "1. Open Kodi & wait 10 seconds.\n"
+            "2. Close Kodi completely.\n"
+            "3. Open Kodi AGAIN to start the Setup."
+        )
         xbmcgui.Dialog().ok("CordCutter", msg)
         os._exit(1)
+        
     except Exception as e:
         if dp: dp.close()
         xbmcgui.Dialog().ok("Error", f"Installation Failed: {str(e)}")
