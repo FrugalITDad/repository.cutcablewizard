@@ -70,7 +70,6 @@ def smart_fresh_start(silent=False):
     return True
 
 def install_build(url, name, version, keep_data=False):
-    # ENSURE DIRECTORY EXISTS
     if not xbmcvfs.exists(ADDON_DATA):
         xbmcvfs.mkdirs(ADDON_DATA)
 
@@ -115,15 +114,11 @@ def install_build(url, name, version, keep_data=False):
         
         # --- UPDATED SUCCESS MESSAGE ---
         msg = (
-            "Build Updated Successfully!\n\n"
-            "TO ACTIVATE THE WIZARD:\n"
-            "1. Open Kodi and wait 10 seconds.\n"
-            "2. Close Kodi normally.\n"
-            "3. Open Kodi AGAIN to start the Setup."
+            "Build Applied Successfully!\n\n"
+            "Please relaunch Kodi now and wait for the\n"
+            "Setup Wizard prompts to appear automatically."
         )
         xbmcgui.Dialog().ok("CordCutter Success", msg)
-        
-        # Force Kodi to close so the user can begin the cycle
         os._exit(1)
 
     except Exception as e:

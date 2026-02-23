@@ -6,17 +6,14 @@ ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
 TRIGGER_FILE = os.path.join(ADDON_DATA, 'firstrun.txt')
 
 def wait_for_settings_close():
-    """Wait loop for non-blocking settings windows"""
     monitor = xbmc.Monitor()
     xbmc.sleep(1000) 
     while xbmc.getCondVisibility('Window.IsActive(addonsettings)'):
-        if monitor.waitForAbort(1):
-            break
+        if monitor.waitForAbort(1): break
     xbmc.sleep(500)
 
 def run_first_run_setup():
     monitor = xbmc.Monitor()
-    # Wait for the skin (Aeon Nox Silvo) to fully initialize
     if monitor.waitForAbort(10): return 
 
     if not os.path.exists(TRIGGER_FILE): return
@@ -24,7 +21,7 @@ def run_first_run_setup():
     dialog = xbmcgui.Dialog()
     
     # 1. SUBTITLES
-    if dialog.yesno("Setup (1/4): Subtitles", "Would you like subtitles to be on by default?"):
+    if dialog.yesno("Setup (1/4): Subtitles", "Would you like subtitles on by default?"):
         xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"subtitles.enabled","value":true},"id":1}')
     else:
         xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"subtitles.enabled","value":false},"id":1}')
@@ -45,37 +42,35 @@ def run_first_run_setup():
         xbmc.executebuiltin('Addon.OpenSettings(script.trakt)')
         wait_for_settings_close()
 
-    # --- FINAL PHASE: IPTV & PVR (With Progress Dialog) ---
+    # --- FINAL PHASE: IPTV MERGE & COUNTDOWN ---
     dp = xbmcgui.DialogProgress()
-    dp.create("CordCutter", "Finishing Final Configurations...")
+    dp.create("CordCutter", "Starting Live TV Merge...")
     
-    # A. Setup Simple Client Paths
-    dp.update(25, "Mapping Live TV Components...")
+    # Trigger the commands
     xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=setup_simple_client)')
-    xbmc.sleep(4000)
-
-    # B. Trigger the Merge
-    dp.update(50, "Merging Channels and EPG...")
-    xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=run)')
-    xbmc.sleep(4000)
-
-    # C. Update PVR Database
-    dp.update(75, "Indexing Live TV Guide...")
-    xbmc.executebuiltin('UpdatePVR')
     xbmc.sleep(2000)
+    xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=run)')
 
-    # FINAL CLEANUP
+    # 60 Second Countdown
+    for i in range(60, 0, -1):
+        if monitor.waitForAbort(1): break
+        percent = int(((60 - i) / 60.0) * 100)
+        dp.update(percent, f"Finalizing Live TV Setup... {i}s remaining", "Please do not touch your remote.")
+
+    # Update PVR after the merge should be finished
+    dp.update(95, "Refreshing TV Guide...", "Final step...")
+    xbmc.executebuiltin('UpdatePVR')
+    xbmc.sleep(3000)
+
+    # Cleanup trigger file
     try: os.remove(TRIGGER_FILE)
     except: pass
     
-    dp.update(100, "Setup Complete!")
-    xbmc.sleep(1000)
     dp.close()
     
-    # --- REBOOT PROMPT ---
-    # Closing and reopening is essential for EPG and Weather refresh
-    if dialog.yesno("All Set!", "Setup is complete! To ensure the TV Guide and Weather are fully loaded, you must restart Kodi.\n\nRestart now?"):
-        # This triggers a Quit which, on Fire TV, usually requires a manual relaunch
+    # Final Restart Prompt
+    msg = "All configurations applied!\nTo see your new Weather and TV Guide, Kodi needs a quick restart."
+    if dialog.yesno("Success!", msg, "Restart Kodi now?", "Later"):
         xbmc.executebuiltin('Quit')
 
 if __name__ == '__main__':
