@@ -1,6 +1,7 @@
 import xbmc, xbmcaddon, xbmcgui, xbmcvfs
 import urllib.request, os, json, ssl, zipfile, shutil
 
+# --- CONFIGURATION ---
 ADDON       = xbmcaddon.Addon()
 ADDON_ID    = ADDON.getAddonInfo('id')
 ADDON_DATA  = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
@@ -8,6 +9,7 @@ TRIGGER_FILE = os.path.join(ADDON_DATA, 'firstrun.txt')
 UPDATE_FILE  = os.path.join(ADDON_DATA, 'update_pending.json')
 VERSION_FILE = os.path.join(ADDON_DATA, 'local_version.txt')
 BACKUP_PATH  = os.path.join(ADDON_DATA, 'temp_backup')
+
 MANIFEST_URL = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
 WHITELIST    = [ADDON_ID, 'repository.cutcablewizard', 'packages', 'temp']
 
@@ -28,7 +30,7 @@ def backup_user_data():
         src = os.path.join(home, 'userdata', xml)
         if os.path.exists(src): shutil.copy(src, BACKUP_PATH)
     ud_addon_data = os.path.join(home, 'userdata', 'addon_data')
-    targets = ['script.trakt', 'script.module.resolveurl', 'plugin.video.fen', 'plugin.video.seren', 'plugin.video.umbrella']
+    targets = ['script.trakt', 'script.module.resolveurl', 'plugin.video.fen', 'plugin.video.seren']
     if os.path.exists(ud_addon_data):
         for item in os.listdir(ud_addon_data):
             if item in targets:
@@ -53,7 +55,7 @@ def restore_user_data():
 
 def smart_fresh_start(silent=False):
     if not silent:
-        if not xbmcgui.Dialog().yesno("Fresh Start", "Wipe current setup but keep this Wizard?"): return False
+        if not xbmcgui.Dialog().yesno("Fresh Start", "Wipe setup but keep Wizard?"): return False
     home = xbmcvfs.translatePath("special://home/")
     for folder in ['addons', 'userdata']:
         path = os.path.join(home, folder)
@@ -68,13 +70,18 @@ def smart_fresh_start(silent=False):
     return True
 
 def install_build(url, name, version, keep_data=False):
-    if not xbmcvfs.exists(ADDON_DATA): xbmcvfs.mkdirs(ADDON_DATA)
+    # ENSURE DIRECTORY EXISTS
+    if not xbmcvfs.exists(ADDON_DATA):
+        xbmcvfs.mkdirs(ADDON_DATA)
+
     if keep_data: backup_user_data()
     if not smart_fresh_start(silent=True): return
+
     zip_path = os.path.join(ADDON_DATA, "temp.zip")
     home = xbmcvfs.translatePath("special://home/")
     dp = xbmcgui.DialogProgress()
-    dp.create("CordCutter Wizard", f"Downloading {name}...")
+    dp.create("CordCutter", f"Downloading {name}...")
+
     try:
         ctx = ssl.create_default_context()
         ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
@@ -87,26 +94,41 @@ def install_build(url, name, version, keep_data=False):
                 f.write(chunk)
                 count += len(chunk)
                 if total > 0: dp.update(int(count*100/total), f"Downloading {name}...")
+
         with zipfile.ZipFile(zip_path, "r") as zf:
             files = zf.infolist()
             for i, file in enumerate(files):
-                if i % 50 == 0: dp.update(int(i*100/len(files)), "Extracting Build Files...")
+                if i % 50 == 0: dp.update(int(i*100/len(files)), "Extracting...")
                 target = os.path.join(home, file.filename)
                 if not os.path.normpath(target).startswith(os.path.normpath(home)): continue
                 if file.is_dir(): os.makedirs(target, exist_ok=True)
                 else:
                     os.makedirs(os.path.dirname(target), exist_ok=True)
                     with open(target, "wb") as f_out: f_out.write(zf.read(file))
+
         if keep_data: restore_user_data()
         with open(VERSION_FILE, 'w') as f: f.write(str(version))
         with open(TRIGGER_FILE, "w") as f: f.write("setup_pending")
         if os.path.exists(UPDATE_FILE): os.remove(UPDATE_FILE)
+
         dp.close()
-        xbmcgui.Dialog().ok("CordCutter", "Build Updated!\n\n1. Open Kodi & wait 10s.\n2. Exit Kodi.\n3. Open Kodi AGAIN to start Setup.")
+        
+        # --- UPDATED SUCCESS MESSAGE ---
+        msg = (
+            "Build Updated Successfully!\n\n"
+            "TO ACTIVATE THE WIZARD:\n"
+            "1. Open Kodi and wait 10 seconds.\n"
+            "2. Close Kodi normally.\n"
+            "3. Open Kodi AGAIN to start the Setup."
+        )
+        xbmcgui.Dialog().ok("CordCutter Success", msg)
+        
+        # Force Kodi to close so the user can begin the cycle
         os._exit(1)
+
     except Exception as e:
         if dp: dp.close()
-        xbmcgui.Dialog().ok("Error", f"Installation Failed: {str(e)}")
+        xbmcgui.Dialog().ok("Error", f"Failed: {str(e)}")
 
 def main():
     if os.path.exists(UPDATE_FILE):
@@ -115,6 +137,7 @@ def main():
             install_build(update_info['url'], update_info['name'], update_info['version'], keep_data=True)
             return
         except: pass
+
     manifest = get_json(MANIFEST_URL)
     if not manifest: return
     choice = xbmcgui.Dialog().select("CordCutter Wizard", ["Install Build", "Fresh Start"])
