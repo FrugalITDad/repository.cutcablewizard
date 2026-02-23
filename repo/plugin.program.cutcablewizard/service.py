@@ -6,11 +6,12 @@ ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
 TRIGGER_FILE = os.path.join(ADDON_DATA, 'firstrun.txt')
 
 def wait_for_settings_close():
+    """Wait loop for non-blocking settings windows"""
     monitor = xbmc.Monitor()
-    xbmc.sleep(1000) 
+    xbmc.sleep(1500) # Increased delay to let window fully focus
     while xbmc.getCondVisibility('Window.IsActive(addonsettings)'):
         if monitor.waitForAbort(1): break
-    xbmc.sleep(500)
+    xbmc.sleep(2000) # Buffer to ensure Kodi UI is stable after closing
 
 def run_first_run_setup():
     monitor = xbmc.Monitor()
@@ -43,30 +44,37 @@ def run_first_run_setup():
         wait_for_settings_close()
 
     # --- FINAL PHASE: IPTV MERGE & COUNTDOWN ---
+    # We wrap this in a try block to prevent an 'AttributeError' if the UI is busy
     dp = xbmcgui.DialogProgress()
-    dp.create("CordCutter", "Starting Live TV Merge...")
-    
-    # Trigger the commands
-    xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=setup_simple_client)')
-    xbmc.sleep(2000)
-    xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=run)')
+    try:
+        dp.create("CordCutter", "Starting Live TV Merge...")
+        
+        # Trigger the commands
+        xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=setup_simple_client)')
+        xbmc.sleep(2000)
+        xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=run)')
 
-    # 60 Second Countdown
-    for i in range(60, 0, -1):
-        if monitor.waitForAbort(1): break
-        percent = int(((60 - i) / 60.0) * 100)
-        dp.update(percent, f"Finalizing Live TV Setup... {i}s remaining", "Please do not touch your remote.")
+        # 60 Second Countdown
+        for i in range(60, 0, -1):
+            if monitor.waitForAbort(1): break
+            percent = int(((60 - i) / 60.0) * 100)
+            dp.update(percent, f"Finalizing Live TV Setup... {i}s remaining", "Please do not touch your remote.")
+
+        dp.close()
+    except:
+        # Fallback if the Dialog fails: use standard notifications
+        xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=setup_simple_client)')
+        xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=run)')
+        dialog.notification("CordCutter", "Running Live TV Sync in background (60s)...", xbmcgui.NOTIFICATION_INFO, 10000)
+        xbmc.sleep(60000)
 
     # Update PVR after the merge should be finished
-    dp.update(95, "Refreshing TV Guide...", "Final step...")
     xbmc.executebuiltin('UpdatePVR')
     xbmc.sleep(3000)
 
     # Cleanup trigger file
     try: os.remove(TRIGGER_FILE)
     except: pass
-    
-    dp.close()
     
     # Final Restart Prompt
     msg = "All configurations applied!\nTo see your new Weather and TV Guide, Kodi needs a quick restart."
