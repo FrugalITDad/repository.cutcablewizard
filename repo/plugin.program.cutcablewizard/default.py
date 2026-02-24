@@ -1,18 +1,14 @@
 import xbmc, xbmcaddon, xbmcgui, xbmcvfs
 import urllib.request, os, json, ssl, zipfile, shutil
 
-# --- CONFIGURATION ---
-# We define the strings first so we don't need the Addon Handle yet
+# --- CONFIGURATION (Strings only, no API calls yet) ---
 ADDON_ID     = 'plugin.program.cutcablewizard'
 MANIFEST_URL = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
 WHITELIST    = [ADDON_ID, 'repository.cutcablewizard', 'packages', 'temp']
 
 def get_addon_data():
-    """Dynamically get the profile path without crashing on fresh installs"""
-    try:
-        return xbmcvfs.translatePath(xbmcaddon.Addon(ADDON_ID).getAddonInfo('profile'))
-    except:
-        return xbmcvfs.translatePath('special://profile/addon_data/' + ADDON_ID)
+    """Manually construct path to prevent 'Unknown Addon ID' crashes"""
+    return xbmcvfs.translatePath('special://profile/addon_data/' + ADDON_ID)
 
 def get_json(url):
     try:
@@ -116,9 +112,12 @@ def install_build(url, name, version, keep_data=False):
         if os.path.exists(update_file): os.remove(update_file)
 
         dp.close()
-        msg = ("Build Applied Successfully!\n\nPlease relaunch Kodi now and wait for the\nSetup Wizard prompts to appear automatically.")
-        xbmcgui.Dialog().ok("CordCutter Success", msg)
+        
+        # --- FIX: Only 2 arguments to prevent TypeError ---
+        success_msg = "Build Applied! Close Kodi normally, then relaunch to start the setup wizard."
+        xbmcgui.Dialog().ok("Success", success_msg)
         os._exit(1)
+        
     except Exception as e:
         if dp: dp.close()
         xbmcgui.Dialog().ok("Error", f"Failed: {str(e)}")
@@ -136,7 +135,7 @@ def main():
 
     manifest = get_json(MANIFEST_URL)
     if not manifest: 
-        xbmcgui.Dialog().ok("Error", "Could not load builds. Check internet.")
+        xbmcgui.Dialog().ok("Connection Error", "Check internet and try again.")
         return
         
     choice = xbmcgui.Dialog().select("CordCutter Wizard", ["Install Build", "Fresh Start"])
