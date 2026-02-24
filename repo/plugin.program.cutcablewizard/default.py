@@ -2,8 +2,8 @@ import xbmc, xbmcaddon, xbmcgui, xbmcvfs
 import urllib.request, os, json, ssl, zipfile, shutil
 
 # --- CONFIGURATION ---
-ADDON       = xbmcaddon.Addon()
-ADDON_ID    = ADDON.getAddonInfo('id')
+ADDON_ID    = 'plugin.program.cutcablewizard'
+ADDON       = xbmcaddon.Addon(ADDON_ID)
 ADDON_DATA  = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
 TRIGGER_FILE = os.path.join(ADDON_DATA, 'firstrun.txt')
 UPDATE_FILE  = os.path.join(ADDON_DATA, 'update_pending.json')
@@ -70,9 +70,7 @@ def smart_fresh_start(silent=False):
     return True
 
 def install_build(url, name, version, keep_data=False):
-    if not xbmcvfs.exists(ADDON_DATA):
-        xbmcvfs.mkdirs(ADDON_DATA)
-
+    if not xbmcvfs.exists(ADDON_DATA): xbmcvfs.mkdirs(ADDON_DATA)
     if keep_data: backup_user_data()
     if not smart_fresh_start(silent=True): return
 
@@ -111,37 +109,11 @@ def install_build(url, name, version, keep_data=False):
         if os.path.exists(UPDATE_FILE): os.remove(UPDATE_FILE)
 
         dp.close()
-        
-        # --- UPDATED SUCCESS MESSAGE ---
-        msg = (
-            "Build Applied Successfully!\n\n"
-            "Please relaunch Kodi now and wait for the\n"
-            "Setup Wizard prompts to appear automatically."
-        )
+        msg = ("Build Applied Successfully!\n\nPlease relaunch Kodi now and wait for the\nSetup Wizard prompts to appear automatically.")
         xbmcgui.Dialog().ok("CordCutter Success", msg)
         os._exit(1)
-
     except Exception as e:
         if dp: dp.close()
         xbmcgui.Dialog().ok("Error", f"Failed: {str(e)}")
-
-def main():
-    if os.path.exists(UPDATE_FILE):
-        try:
-            with open(UPDATE_FILE, 'r') as f: update_info = json.load(f)
-            install_build(update_info['url'], update_info['name'], update_info['version'], keep_data=True)
-            return
-        except: pass
-
-    manifest = get_json(MANIFEST_URL)
-    if not manifest: return
-    choice = xbmcgui.Dialog().select("CordCutter Wizard", ["Install Build", "Fresh Start"])
-    if choice == 0:
-        builds = manifest.get('builds', [])
-        names = [f"{b['name']} (v{b['version']})" for b in builds]
-        sel = xbmcgui.Dialog().select("Select Build", names)
-        if sel != -1: install_build(builds[sel]['download_url'], builds[sel]['name'], builds[sel]['version'])
-    elif choice == 1:
-        if smart_fresh_start(): os._exit(1)
 
 if __name__ == '__main__': main()
