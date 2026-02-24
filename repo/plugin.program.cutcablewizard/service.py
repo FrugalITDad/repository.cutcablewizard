@@ -1,10 +1,9 @@
 import xbmc, xbmcaddon, xbmcvfs, os, xbmcgui, json, urllib.request, ssl
 
-# --- CRITICAL FIX: NO API CALLS AT TOP LEVEL ---
+# --- NO xbmcaddon.Addon() CALLS AT THE TOP ---
 ADDON_ID = 'plugin.program.cutcablewizard'
 
 def get_addon_data():
-    """Manually construct path to bypass database indexing errors"""
     return xbmcvfs.translatePath('special://profile/addon_data/' + ADDON_ID)
 
 def wait_for_settings_close():
@@ -22,13 +21,12 @@ def run_first_run_setup():
         return
 
     monitor = xbmc.Monitor()
-    # Wait for the system to settle before popping dialogs
     if monitor.waitForAbort(12): return 
 
     dialog = xbmcgui.Dialog()
     
-    # --- PHASE 1: INTERACTIVE (Simplified Dialogs to prevent argument errors) ---
-    if dialog.yesno("Setup (1/4): Subtitles", "Would you like to enable subtitles by default?"):
+    # --- PHASE 1: INTERACTIVE ---
+    if dialog.yesno("Setup (1/4): Subtitles", "Enable subtitles by default?"):
         xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"subtitles.enabled","value":true},"id":1}')
     else:
         xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"subtitles.enabled","value":false},"id":1}')
@@ -37,47 +35,45 @@ def run_first_run_setup():
     if device_name:
         xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"services.devicename","value":"%s"},"id":1}' % device_name)
 
-    if dialog.yesno("Setup (3/4): Weather", "Would you like to configure your weather location?"):
+    if dialog.yesno("Setup (3/4): Weather", "Configure weather location?"):
         dialog.ok("Weather Hint", "Search for your city manually. Do NOT use 'Current Location'.")
         xbmc.executebuiltin('Addon.OpenSettings(weather.gismeteo)')
         wait_for_settings_close()
 
-    if dialog.yesno("Setup (4/4): Trakt", "Would you like to authorize the Trakt application now?"):
+    if dialog.yesno("Setup (4/4): Trakt", "Authorize Trakt?"):
         xbmc.executebuiltin('Addon.OpenSettings(script.trakt)')
         wait_for_settings_close()
 
-    # --- PHASE 2: LIVE TV SYNC (130s ALIGNMENT) ---
+    # --- PHASE 2: LIVE TV SYNC ---
     dp = xbmcgui.DialogProgress()
-    dp.create("CordCutter", "Finalizing Build Configurations...")
+    # Heading + Message in one string for Kodi 21 compatibility
+    dp.create("CordCutter", "Starting Live TV Merge and Sync...")
     
     xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=setup_simple_client)')
     xbmc.sleep(3000)
     xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=run)')
 
-    # 130 Second Countdown (Aligned to your 3:42 total timing)
     total_wait = 130
     for i in range(total_wait, 0, -1):
         if monitor.waitForAbort(1): break
         percent = int(((total_wait - i) / float(total_wait)) * 100)
-        dp.update(percent, "Syncing Channels & EPG Guide...", f"Time Remaining: {i}s")
+        
+        # FIX: Only 2 arguments passed (percent, and one combined string)
+        msg = f"Syncing Channels & EPG Guide...\nTime Remaining: {i}s"
+        dp.update(percent, msg)
 
-    dp.update(98, "Refreshing TV Database...", "Almost there!")
+    dp.update(98, "Refreshing TV database... almost finished.")
     xbmc.executebuiltin('UpdatePVR')
     xbmc.sleep(5000)
 
-    # Clean up the trigger file
     try: os.remove(trigger_file)
     except: pass
     
     dp.close()
     
-    # --- FINAL REBOOT (Simplified to 2 arguments to fix line 84 error) ---
-    msg = "Setup complete! Kodi must restart now to apply the new TV Guide and Weather settings."
-    if dialog.yesno("Success!", msg):
+    # FIX: Final confirmation (2 arguments max)
+    if dialog.yesno("Success!", "Setup complete! Restart Kodi now to finalize everything?"):
         xbmc.executebuiltin('ShutDown')
-        xbmc.sleep(2000)
-        import os as python_os
-        python_os._exit(1)
 
 if __name__ == '__main__':
     run_first_run_setup()
