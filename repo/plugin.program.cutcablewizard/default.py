@@ -1,7 +1,7 @@
-import xbmc, xbmcaddon, xbmcgui, xbmcvfs
+import xbmc, xbmcgui, xbmcvfs
 import urllib.request, os, json, ssl, zipfile, shutil
 
-# --- CONFIGURATION (Strings only, no API calls yet) ---
+# --- CONFIGURATION (Zero-ID Approach) ---
 ADDON_ID     = 'plugin.program.cutcablewizard'
 MANIFEST_URL = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
 WHITELIST    = [ADDON_ID, 'repository.cutcablewizard', 'packages', 'temp']
@@ -52,7 +52,7 @@ def restore_user_data(backup_path):
 
 def smart_fresh_start(silent=False):
     if not silent:
-        if not xbmcgui.Dialog().yesno("Fresh Start", "Wipe setup but keep Wizard?"): return False
+        if not xbmcgui.Dialog().yesno("Fresh Start", "Wipe current setup but keep the Wizard?"): return False
     home = xbmcvfs.translatePath("special://home/")
     for folder in ['addons', 'userdata']:
         path = os.path.join(home, folder)
@@ -98,7 +98,7 @@ def install_build(url, name, version, keep_data=False):
         with zipfile.ZipFile(zip_path, "r") as zf:
             files = zf.infolist()
             for i, file in enumerate(files):
-                if i % 50 == 0: dp.update(int(i*100/len(files)), "Extracting...")
+                if i % 50 == 0: dp.update(int(i*100/len(files)), "Extracting Build...")
                 target = os.path.join(home, file.filename)
                 if not os.path.normpath(target).startswith(os.path.normpath(home)): continue
                 if file.is_dir(): os.makedirs(target, exist_ok=True)
@@ -113,14 +113,14 @@ def install_build(url, name, version, keep_data=False):
 
         dp.close()
         
-        # --- FIX: Only 2 arguments to prevent TypeError ---
-        success_msg = "Build Applied! Close Kodi normally, then relaunch to start the setup wizard."
+        # --- KODI 21 SAFE DIALOG ---
+        success_msg = "Build Applied!\n\nYou MUST Restart Kodi now. The setup wizard will start automatically upon relaunch."
         xbmcgui.Dialog().ok("Success", success_msg)
         os._exit(1)
         
     except Exception as e:
         if dp: dp.close()
-        xbmcgui.Dialog().ok("Error", f"Failed: {str(e)}")
+        xbmcgui.Dialog().ok("Error", f"Installation failed: {str(e)}")
 
 def main():
     addon_data = get_addon_data()
@@ -135,14 +135,14 @@ def main():
 
     manifest = get_json(MANIFEST_URL)
     if not manifest: 
-        xbmcgui.Dialog().ok("Connection Error", "Check internet and try again.")
+        xbmcgui.Dialog().ok("Network Error", "Unable to reach the build server. Please check your connection.")
         return
         
     choice = xbmcgui.Dialog().select("CordCutter Wizard", ["Install Build", "Fresh Start"])
     if choice == 0:
         builds = manifest.get('builds', [])
         names = [f"{b['name']} (v{b['version']})" for b in builds]
-        sel = xbmcgui.Dialog().select("Select Build", names)
+        sel = xbmcgui.Dialog().select("Select Your Build", names)
         if sel != -1: install_build(builds[sel]['download_url'], builds[sel]['name'], builds[sel]['version'])
     elif choice == 1:
         if smart_fresh_start(): os._exit(1)

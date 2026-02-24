@@ -1,9 +1,10 @@
-import xbmc, xbmcaddon, xbmcvfs, os, xbmcgui, json, urllib.request, ssl
+import xbmc, xbmcvfs, os, xbmcgui
 
-# --- NO xbmcaddon.Addon() CALLS AT THE TOP ---
+# --- CONFIGURATION (STRICTLY NO xbmcaddon.Addon() CALLS) ---
 ADDON_ID = 'plugin.program.cutcablewizard'
 
 def get_addon_data():
+    """Manually construct path to bypass the 'Unknown Addon ID' error"""
     return xbmcvfs.translatePath('special://profile/addon_data/' + ADDON_ID)
 
 def wait_for_settings_close():
@@ -17,10 +18,12 @@ def run_first_run_setup():
     addon_data = get_addon_data()
     trigger_file = os.path.join(addon_data, 'firstrun.txt')
 
+    # Quick check: If no file, exit immediately before doing anything else
     if not os.path.exists(trigger_file): 
         return
 
     monitor = xbmc.Monitor()
+    # Wait 12 seconds for the skin and network to stabilize
     if monitor.waitForAbort(12): return 
 
     dialog = xbmcgui.Dialog()
@@ -44,35 +47,34 @@ def run_first_run_setup():
         xbmc.executebuiltin('Addon.OpenSettings(script.trakt)')
         wait_for_settings_close()
 
-    # --- PHASE 2: LIVE TV SYNC ---
+    # --- PHASE 2: LIVE TV SYNC (145s Countdown) ---
     dp = xbmcgui.DialogProgress()
-    # Heading + Message in one string for Kodi 21 compatibility
-    dp.create("CordCutter", "Starting Live TV Merge and Sync...")
+    dp.create("CordCutter", "Finalizing Build: Syncing Live TV Guide...")
     
     xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=setup_simple_client)')
     xbmc.sleep(3000)
     xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=run)')
 
-    total_wait = 130
+    total_wait = 145 
     for i in range(total_wait, 0, -1):
         if monitor.waitForAbort(1): break
         percent = int(((total_wait - i) / float(total_wait)) * 100)
-        
-        # FIX: Only 2 arguments passed (percent, and one combined string)
+        # Message formatted for Kodi 21 (2 arguments only)
         msg = f"Syncing Channels & EPG Guide...\nTime Remaining: {i}s"
         dp.update(percent, msg)
 
-    dp.update(98, "Refreshing TV database... almost finished.")
+    dp.update(99, "Refreshing TV Database... almost done.")
     xbmc.executebuiltin('UpdatePVR')
     xbmc.sleep(5000)
 
+    # Cleanup trigger
     try: os.remove(trigger_file)
     except: pass
     
     dp.close()
     
-    # FIX: Final confirmation (2 arguments max)
-    if dialog.yesno("Success!", "Setup complete! Restart Kodi now to finalize everything?"):
+    # --- FINAL REBOOT ---
+    if dialog.yesno("Success!", "Setup complete! Restart Kodi now to apply changes?"):
         xbmc.executebuiltin('ShutDown')
 
 if __name__ == '__main__':
