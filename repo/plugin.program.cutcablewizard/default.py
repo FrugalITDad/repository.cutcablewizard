@@ -2,16 +2,17 @@ import xbmc, xbmcaddon, xbmcgui, xbmcvfs
 import urllib.request, os, json, ssl, zipfile, shutil
 
 # --- CONFIGURATION ---
-ADDON_ID    = 'plugin.program.cutcablewizard'
-ADDON       = xbmcaddon.Addon(ADDON_ID)
-ADDON_DATA  = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
-TRIGGER_FILE = os.path.join(ADDON_DATA, 'firstrun.txt')
-UPDATE_FILE  = os.path.join(ADDON_DATA, 'update_pending.json')
-VERSION_FILE = os.path.join(ADDON_DATA, 'local_version.txt')
-BACKUP_PATH  = os.path.join(ADDON_DATA, 'temp_backup')
-
+# We define the strings first so we don't need the Addon Handle yet
+ADDON_ID     = 'plugin.program.cutcablewizard'
 MANIFEST_URL = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
 WHITELIST    = [ADDON_ID, 'repository.cutcablewizard', 'packages', 'temp']
+
+def get_addon_data():
+    """Dynamically get the profile path without crashing on fresh installs"""
+    try:
+        return xbmcvfs.translatePath(xbmcaddon.Addon(ADDON_ID).getAddonInfo('profile'))
+    except:
+        return xbmcvfs.translatePath('special://profile/addon_data/' + ADDON_ID)
 
 def get_json(url):
     try:
@@ -22,36 +23,36 @@ def get_json(url):
             return json.loads(r.read())
     except: return None
 
-def backup_user_data():
-    if os.path.exists(BACKUP_PATH): shutil.rmtree(BACKUP_PATH)
-    os.makedirs(BACKUP_PATH, exist_ok=True)
+def backup_user_data(backup_path):
+    if os.path.exists(backup_path): shutil.rmtree(backup_path)
+    os.makedirs(backup_path, exist_ok=True)
     home = xbmcvfs.translatePath("special://home/")
     for xml in ['favourites.xml', 'sources.xml']:
         src = os.path.join(home, 'userdata', xml)
-        if os.path.exists(src): shutil.copy(src, BACKUP_PATH)
+        if os.path.exists(src): shutil.copy(src, backup_path)
     ud_addon_data = os.path.join(home, 'userdata', 'addon_data')
     targets = ['script.trakt', 'script.module.resolveurl', 'plugin.video.fen', 'plugin.video.seren']
     if os.path.exists(ud_addon_data):
         for item in os.listdir(ud_addon_data):
             if item in targets:
                 src = os.path.join(ud_addon_data, item)
-                dst = os.path.join(BACKUP_PATH, item)
+                dst = os.path.join(backup_path, item)
                 if os.path.isdir(src): shutil.copytree(src, dst)
 
-def restore_user_data():
-    if not os.path.exists(BACKUP_PATH): return
+def restore_user_data(backup_path):
+    if not os.path.exists(backup_path): return
     home = xbmcvfs.translatePath("special://home/")
     ud_addon_data = os.path.join(home, 'userdata', 'addon_data')
-    for f in os.listdir(BACKUP_PATH):
+    for f in os.listdir(backup_path):
         if f.endswith('.xml'):
-            shutil.copy(os.path.join(BACKUP_PATH, f), os.path.join(home, 'userdata', f))
-    for item in os.listdir(BACKUP_PATH):
-        src = os.path.join(BACKUP_PATH, item)
+            shutil.copy(os.path.join(backup_path, f), os.path.join(home, 'userdata', f))
+    for item in os.listdir(backup_path):
+        src = os.path.join(backup_path, item)
         if os.path.isdir(src):
             dst = os.path.join(ud_addon_data, item)
             if os.path.exists(dst): shutil.rmtree(dst)
             shutil.copytree(src, dst)
-    shutil.rmtree(BACKUP_PATH, ignore_errors=True)
+    shutil.rmtree(backup_path, ignore_errors=True)
 
 def smart_fresh_start(silent=False):
     if not silent:
@@ -70,11 +71,17 @@ def smart_fresh_start(silent=False):
     return True
 
 def install_build(url, name, version, keep_data=False):
-    if not xbmcvfs.exists(ADDON_DATA): xbmcvfs.mkdirs(ADDON_DATA)
-    if keep_data: backup_user_data()
+    addon_data   = get_addon_data()
+    version_file = os.path.join(addon_data, 'local_version.txt')
+    trigger_file = os.path.join(addon_data, 'firstrun.txt')
+    update_file  = os.path.join(addon_data, 'update_pending.json')
+    backup_path  = os.path.join(addon_data, 'temp_backup')
+    
+    if not xbmcvfs.exists(addon_data): xbmcvfs.mkdirs(addon_data)
+    if keep_data: backup_user_data(backup_path)
     if not smart_fresh_start(silent=True): return
 
-    zip_path = os.path.join(ADDON_DATA, "temp.zip")
+    zip_path = os.path.join(addon_data, "temp.zip")
     home = xbmcvfs.translatePath("special://home/")
     dp = xbmcgui.DialogProgress()
     dp.create("CordCutter", f"Downloading {name}...")
@@ -103,10 +110,10 @@ def install_build(url, name, version, keep_data=False):
                     os.makedirs(os.path.dirname(target), exist_ok=True)
                     with open(target, "wb") as f_out: f_out.write(zf.read(file))
 
-        if keep_data: restore_user_data()
-        with open(VERSION_FILE, 'w') as f: f.write(str(version))
-        with open(TRIGGER_FILE, "w") as f: f.write("setup_pending")
-        if os.path.exists(UPDATE_FILE): os.remove(UPDATE_FILE)
+        if keep_data: restore_user_data(backup_path)
+        with open(version_file, 'w') as f: f.write(str(version))
+        with open(trigger_file, "w") as f: f.write("setup_pending")
+        if os.path.exists(update_file): os.remove(update_file)
 
         dp.close()
         msg = ("Build Applied Successfully!\n\nPlease relaunch Kodi now and wait for the\nSetup Wizard prompts to appear automatically.")
@@ -115,5 +122,30 @@ def install_build(url, name, version, keep_data=False):
     except Exception as e:
         if dp: dp.close()
         xbmcgui.Dialog().ok("Error", f"Failed: {str(e)}")
+
+def main():
+    addon_data = get_addon_data()
+    update_file = os.path.join(addon_data, 'update_pending.json')
+    
+    if os.path.exists(update_file):
+        try:
+            with open(update_file, 'r') as f: update_info = json.load(f)
+            install_build(update_info['url'], update_info['name'], update_info['version'], keep_data=True)
+            return
+        except: pass
+
+    manifest = get_json(MANIFEST_URL)
+    if not manifest: 
+        xbmcgui.Dialog().ok("Error", "Could not load builds. Check internet.")
+        return
+        
+    choice = xbmcgui.Dialog().select("CordCutter Wizard", ["Install Build", "Fresh Start"])
+    if choice == 0:
+        builds = manifest.get('builds', [])
+        names = [f"{b['name']} (v{b['version']})" for b in builds]
+        sel = xbmcgui.Dialog().select("Select Build", names)
+        if sel != -1: install_build(builds[sel]['download_url'], builds[sel]['name'], builds[sel]['version'])
+    elif choice == 1:
+        if smart_fresh_start(): os._exit(1)
 
 if __name__ == '__main__': main()

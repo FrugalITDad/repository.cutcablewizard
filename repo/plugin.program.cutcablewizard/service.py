@@ -1,14 +1,12 @@
 import xbmc, xbmcaddon, xbmcvfs, os, xbmcgui, json, urllib.request, ssl
 
-# --- HARDCODED ID TO PREVENT RUNTIME ERROR ---
+# --- CONFIGURATION (NO API CALLS AT TOP LEVEL) ---
 ADDON_ID = 'plugin.program.cutcablewizard'
-try:
-    ADDON = xbmcaddon.Addon(ADDON_ID)
-    ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
-except:
-    ADDON_DATA = xbmcvfs.translatePath('special://profile/addon_data/' + ADDON_ID)
 
-TRIGGER_FILE = os.path.join(ADDON_DATA, 'firstrun.txt')
+def get_addon_data():
+    """Manually construct path to avoid 'Unknown Addon ID' crashes"""
+    # This points to the same place as ADDON.getAddonInfo('profile')
+    return xbmcvfs.translatePath('special://profile/addon_data/' + ADDON_ID)
 
 def wait_for_settings_close():
     monitor = xbmc.Monitor()
@@ -18,11 +16,16 @@ def wait_for_settings_close():
     xbmc.sleep(1500)
 
 def run_first_run_setup():
-    monitor = xbmc.Monitor()
-    # Initial wait for hardware/skin to settle
-    if monitor.waitForAbort(12): return 
+    addon_data = get_addon_data()
+    trigger_file = os.path.join(addon_data, 'firstrun.txt')
 
-    if not os.path.exists(TRIGGER_FILE): return
+    # If the trigger file doesn't exist, exit immediately without doing anything
+    if not os.path.exists(trigger_file): 
+        return
+
+    monitor = xbmc.Monitor()
+    # Wait for skin/hardware to settle (approx 12s)
+    if monitor.waitForAbort(12): return 
 
     dialog = xbmcgui.Dialog()
     
@@ -46,16 +49,14 @@ def run_first_run_setup():
         wait_for_settings_close()
 
     # --- PHASE 2: LIVE TV SYNC (80s ALIGNMENT) ---
-    # Aligned to your 1m 14s observation + small buffer
     dp = xbmcgui.DialogProgress()
     dp.create("CordCutter", "Starting Live TV Merge...")
     
-    # Fire the IPTV Merge background tasks
     xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=setup_simple_client)')
     xbmc.sleep(3000)
     xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=run)')
 
-    # 80 Second Countdown (covers the 74s merge time)
+    # 80 Second Countdown
     total_wait = 80
     for i in range(total_wait, 0, -1):
         if monitor.waitForAbort(1): break
@@ -66,8 +67,8 @@ def run_first_run_setup():
     xbmc.executebuiltin('UpdatePVR')
     xbmc.sleep(5000)
 
-    # Cleanup the trigger so it doesn't run again
-    try: os.remove(TRIGGER_FILE)
+    # Cleanup trigger
+    try: os.remove(trigger_file)
     except: pass
     
     dp.close()
@@ -75,7 +76,6 @@ def run_first_run_setup():
     # --- FINAL REBOOT ---
     msg = "All configurations applied!\nTo see your new Guide and Weather, Kodi must restart."
     if dialog.yesno("Success!", msg, "Restart Now?", "Later"):
-        # Powerdown/Shutdown is the most effective exit for Android
         xbmc.executebuiltin('ShutDown')
         xbmc.sleep(2000)
         os._exit(1)
