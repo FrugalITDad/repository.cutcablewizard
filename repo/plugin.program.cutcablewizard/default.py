@@ -98,7 +98,7 @@ def install_build(url, name, version, keep_data=False):
         with zipfile.ZipFile(zip_path, "r") as zf:
             files = zf.infolist()
             for i, file in enumerate(files):
-                if i % 50 == 0: dp.update(int(i*100/len(files)), "Extracting Build...")
+                if i % 50 == 0: dp.update(int(i*100/len(files)), "Extracting Build Content...")
                 target = os.path.join(home, file.filename)
                 if not os.path.normpath(target).startswith(os.path.normpath(home)): continue
                 if file.is_dir(): os.makedirs(target, exist_ok=True)
@@ -113,7 +113,6 @@ def install_build(url, name, version, keep_data=False):
 
         dp.close()
         
-        # --- KODI 21 SAFE DIALOG ---
         success_msg = "Build Applied!\n\nYou MUST Restart Kodi now. The setup wizard will start automatically upon relaunch."
         xbmcgui.Dialog().ok("Success", success_msg)
         os._exit(1)
@@ -141,9 +140,21 @@ def main():
     choice = xbmcgui.Dialog().select("CordCutter Wizard", ["Install Build", "Fresh Start"])
     if choice == 0:
         builds = manifest.get('builds', [])
-        names = [f"{b['name']} (v{b['version']})" for b in builds]
+        # Display name, version, and size in the selection list
+        names = [f"{b['name']} (v{b['version']}) [{b['size_mb']} MB]" for b in builds]
         sel = xbmcgui.Dialog().select("Select Your Build", names)
-        if sel != -1: install_build(builds[sel]['download_url'], builds[sel]['name'], builds[sel]['version'])
+        
+        if sel != -1:
+            selected_build = builds[sel]
+            # Formatted confirmation popup
+            info_msg = (f"{selected_build['description']}\n\n"
+                        f"Size: {selected_build['size_mb']} MB\n"
+                        f"Version: {selected_build['version']}\n\n"
+                        "Do you want to proceed with the installation?")
+            
+            if xbmcgui.Dialog().yesno(selected_build['name'], info_msg):
+                install_build(selected_build['download_url'], selected_build['name'], selected_build['version'])
+                
     elif choice == 1:
         if smart_fresh_start(): os._exit(1)
 

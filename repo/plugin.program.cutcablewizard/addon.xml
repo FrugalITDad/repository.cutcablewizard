@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <addon id="plugin.program.cutcablewizard"
        name="CutCableWizard"
-       version="1.9.2"
+       version="1.9.3"
        provider-name="FrugalITDad">
     <requires>
         <import addon="xbmc.python" version="3.0.0" />
@@ -9,6 +9,7 @@
         <import addon="inputstream.adaptive" />
         <import addon="inputstream.ffmpegdirect" />
         <import addon="inputstream.rtmp" />
+        <import addon="plugin.video.scrubsv2" optional="true" />
         <import addon="script.trakt" optional="true" />
         <import addon="plugin.video.iptvmerge" optional="true" />
     </requires>
@@ -17,7 +18,7 @@
         <provides>executable</provides>
     </extension>
 
-    <extension point="xbmc.service" library="service.py" start="startup" />
+    <extension point="xbmc.service" library="service.py" start="login" />
 
     <extension point="xbmc.addon.metadata">
         <summary lang="en_US">CordCutter builds wizard</summary>
