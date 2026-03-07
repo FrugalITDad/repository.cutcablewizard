@@ -1,9 +1,8 @@
 import xbmc, xbmcgui, xbmcvfs, os, shutil, urllib.request, json, ssl, zipfile
 
-# --- CONFIGURATION ---
 ADDON_ID     = 'plugin.program.cutcablewizard'
 MANIFEST_URL = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
-WHITELIST    = [ADDON_ID, 'repository.cutcablewizard', 'packages', 'temp']
+WHITELIST    = [ADDON_ID, 'packages', 'temp']
 
 def get_addon_data():
     return xbmcvfs.translatePath('special://profile/addon_data/' + ADDON_ID)
@@ -12,18 +11,15 @@ def get_json(url):
     try:
         ctx = ssl.create_default_context()
         ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
-        req = urllib.request.Request(url, headers={'User-Agent': 'Kodi-Wizard/1.1'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'Kodi-Wizard'})
         with urllib.request.urlopen(req, context=ctx) as r:
             return json.loads(r.read().decode('utf-8'))
     except: return None
 
 def smart_fresh_start(silent=False):
     if not silent:
-        if not xbmcgui.Dialog().yesno("Fresh Start", "Wipe current setup but keep Wizard and Repos?"): return False
+        if not xbmcgui.Dialog().yesno("Fresh Start", "Wipe setup but keep Wizard/Repos?"): return False
     
-    # RE-ENABLE UNKNOWN SOURCES
-    xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"addons.unknownsources","value":true},"id":1}')
-
     home = xbmcvfs.translatePath("special://home/")
     for folder in ['addons', 'userdata']:
         path = os.path.join(home, folder)
@@ -36,17 +32,19 @@ def smart_fresh_start(silent=False):
                 if os.path.isdir(full_path): shutil.rmtree(full_path, ignore_errors=True)
                 else: os.remove(full_path)
             except: pass
+
+    # FORCE UNKNOWN SOURCES & SAVE
+    xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"addons.unknownsources","value":true},"id":1}')
+    xbmc.executebuiltin('SaveSceneSettings') 
     
     if not silent:
-        xbmcgui.Dialog().ok("Fresh Start", "Cleanup Complete! Repos preserved.")
+        xbmcgui.Dialog().ok("Fresh Start", "Cleanup Complete! Settings & Repos preserved.")
         os._exit(1)
     return True
 
 def install_build(url, name, version):
     addon_data = get_addon_data()
     if not xbmcvfs.exists(addon_data): xbmcvfs.mkdirs(addon_data)
-    
-    # Trigger Fresh Start first
     smart_fresh_start(silent=True)
 
     zip_path = os.path.join(addon_data, "temp.zip")
@@ -70,29 +68,25 @@ def install_build(url, name, version):
         with zipfile.ZipFile(zip_path, "r") as zf:
             files = zf.infolist()
             for i, file in enumerate(files):
-                if i % 50 == 0: dp.update(int(i*100/len(files)), "Extracting Build Content...")
+                if i % 100 == 0: dp.update(int(i*100/len(files)), "Extracting Build Content...")
                 target = os.path.join(home, file.filename)
-                if not os.path.normpath(target).startswith(os.path.normpath(home)): continue
                 if file.is_dir(): os.makedirs(target, exist_ok=True)
                 else:
                     os.makedirs(os.path.dirname(target), exist_ok=True)
                     with open(target, "wb") as f_out: f_out.write(zf.read(file))
 
-        # Create the trigger for service.py
         with open(os.path.join(addon_data, 'firstrun.txt'), 'w') as f: f.write("setup_pending")
-        
         dp.close()
-        xbmcgui.Dialog().ok("Success", "Build Applied! Restart Kodi to begin setup.")
+        xbmcgui.Dialog().ok("Success", "Build Applied! Restarting Kodi for Setup.")
         os._exit(1)
-        
     except Exception as e:
         if dp: dp.close()
-        xbmcgui.Dialog().ok("Error", f"Installation failed: {str(e)}")
+        xbmcgui.Dialog().ok("Error", f"Fail: {str(e)}")
 
 def main():
     manifest = get_json(MANIFEST_URL)
     if not manifest: 
-        xbmcgui.Dialog().ok("Error", "Network Error. Check your connection or JSON syntax.")
+        xbmcgui.Dialog().ok("Error", "Check Connection.")
         return
         
     choice = xbmcgui.Dialog().select("CordCutter Wizard", ["Install Build", "Fresh Start"])
@@ -101,9 +95,7 @@ def main():
         names = [f"{b['name']} ({b['size_mb']} MB)" for b in builds]
         sel = xbmcgui.Dialog().select("Select Your Build", names)
         if sel != -1:
-            selected = builds[sel]
-            if xbmcgui.Dialog().yesno(selected['name'], f"{selected['description']}\n\nProceed?"):
-                install_build(selected['download_url'], selected['name'], selected['version'])
+            install_build(builds[sel]['download_url'], builds[sel]['name'], builds[sel]['version'])
     elif choice == 1:
         smart_fresh_start()
 
