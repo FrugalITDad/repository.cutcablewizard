@@ -15,57 +15,56 @@ def wait_for_settings_close():
 def run_first_run_setup():
     addon_data = get_addon_data()
     trigger_file = os.path.join(addon_data, 'firstrun.txt')
-
-    if not os.path.exists(trigger_file): 
-        return
+    if not os.path.exists(trigger_file): return
 
     monitor = xbmc.Monitor()
-    if monitor.waitForAbort(10): return 
-
+    
+    # 1. WAIT FOR SKIN & BACKGROUND TASKS
+    # Give the skin 45 seconds to start building its menu
+    if monitor.waitForAbort(45): return 
+    
+    # 2. SMART WAIT: Don't pop up if Skin Shortcuts or Library is busy
+    while xbmc.getCondVisibility('Window.IsActive(infodialog)') or xbmc.getCondVisibility('Library.IsScanning'):
+        if monitor.waitForAbort(5): break
+    
     dialog = xbmcgui.Dialog()
     
-    # --- STEP 1: TRAKT MAIN ---
-    if dialog.yesno("Setup (1/2): Trakt", "Authorize your main Trakt account for history syncing?"):
+    # --- TRAKT MAIN ---
+    if dialog.yesno("Setup (1/2): Trakt", "Authorize your main Trakt account?"):
         xbmc.executebuiltin('Addon.OpenSettings(script.trakt)')
         wait_for_settings_close()
 
-    # --- STEP 2: SCRUBS V2 (Plus Build Fix) ---
+    # --- SCRUBS V2 TRAKT (Direct Trigger) ---
     if xbmc.getCondVisibility('System.HasAddon(plugin.video.scrubsv2)'):
-        if dialog.yesno("Setup (2/2): Scrubs V2", "Authorize Trakt inside Scrubs V2 now?"):
-            # Updated trigger: forcing the plugin to open the Trakt Auth window directly
+        if dialog.yesno("Setup (2/2): Scrubs V2", "Authorize Trakt for Scrubs V2 (Plus Build)?"):
+            # Using the direct action URL to force the PIN popup
             xbmc.executebuiltin('RunPlugin(plugin://plugin.video.scrubsv2/?action=authTrakt)')
-            # We give it a long sleep here because Trakt popups can be slow to appear
-            xbmc.sleep(5000) 
+            xbmc.sleep(8000) # Longer sleep to allow PIN window to generate
 
-    # --- PHASE 3: LIVE TV SYNC ---
+    # --- IPTV SYNC ---
     dp = xbmcgui.DialogProgress()
     dp.create("CordCutter", "Finalizing Build: Syncing Live TV Guide...")
-    
     xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=run)')
 
-    # 145s Countdown for IPTV Merge
     total_wait = 145 
     for i in range(total_wait, 0, -1):
         if monitor.waitForAbort(1): break
         percent = int(((total_wait - i) / float(total_wait)) * 100)
-        dp.update(percent, f"Syncing Channels & EPG...\nTime Remaining: {i}s")
+        dp.update(percent, f"Syncing Guide... {i}s remaining.")
 
-    # --- NEW: PVR BUSY CHECK ---
-    # This loop waits if Kodi is still internally processing the guide (EPG)
+    # 3. PVR BUSY CHECK
     while xbmc.getCondVisibility('PVR.IsUpdatingGuide'):
-        if monitor.waitForAbort(2): break
-        dp.update(99, "Kodi is still processing the Guide data...\nPlease wait a moment.")
+        if monitor.waitForAbort(3): break
+        dp.update(99, "Guide is still processing...\nAlmost done.")
 
+    dp.close()
     try: os.remove(trigger_file)
     except: pass
     
-    dp.close()
-    
-    # --- UPDATED FINAL MESSAGE ---
-    final_msg = ("Setup complete! All background tasks and guide updates have finished.\n\n"
-                 "Click YES to Restart Kodi now and launch your new build.")
-    
-    if dialog.yesno("All Done!", final_msg):
+    # 4. FINAL REBOOT MESSAGE
+    msg = ("Setup complete! All background tasks and guide updates have finished.\n\n"
+           "Click YES to Restart Kodi now and apply all changes.")
+    if dialog.yesno("Success!", msg):
         xbmc.executebuiltin('ShutDown')
 
 if __name__ == '__main__':
