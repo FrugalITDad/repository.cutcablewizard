@@ -1,4 +1,6 @@
 {
+  "builds": [
+    {
       "id": "cordcutter_base",
       "name": "CordCutter Base",
       "description": "Free Verified Services Only w Live TV.",
