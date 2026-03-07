@@ -13,14 +13,13 @@ def wait_for_settings_close():
     xbmc.sleep(1500)
 
 def is_skin_busy():
-    """Check if Skin Shortcuts or typical busy dialogs are active."""
-    # Window 10101 is the standard busy/info dialog used by Skin Shortcuts
+    # 10101 is the Skin Shortcuts progress bar
     return (xbmc.getCondVisibility('Window.IsActive(10101)') or 
             xbmc.getCondVisibility('Library.IsScanning') or
             xbmc.getCondVisibility('Window.IsActive(infodialog)'))
 
 def run_first_run_setup():
-    # FORCE UNKNOWN SOURCES ON STARTUP
+    # Insurance: Ensure Unknown Sources is on before doing anything
     xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"addons.unknownsources","value":true},"id":1}')
 
     addon_data = get_addon_data()
@@ -29,33 +28,30 @@ def run_first_run_setup():
 
     monitor = xbmc.Monitor()
     
-    # --- PHASE 1: THE IDLE WAIT ---
-    # Give the skin a moment to even start the shortcut process
-    xbmc.sleep(15000) 
+    # Wait for initial boot / splash screen
+    xbmc.sleep(20000) 
     
-    # Loop indefinitely until the skin is no longer "busy"
-    # This prevents the setup from popping up WHILE the 'Building Menu' bar is visible
+    # WAIT FOR IDLE: This is where we wait for 'Building Menu' to finish
     while is_skin_busy():
         if monitor.waitForAbort(5): return
-        xbmc.log("WIZARD: Waiting for Skin Shortcuts to finish...", xbmc.LOGINFO)
+        xbmc.log("WIZARD: Skin is busy, waiting to start setup...", xbmc.LOGINFO)
 
-    # Extra buffer to allow the skin to finish its forced 'Reload'
+    # Extra buffer for the skin reload to finish
     xbmc.sleep(10000) 
 
     dialog = xbmcgui.Dialog()
     
-    # --- PHASE 2: SETUP DIALOGS ---
+    # --- SETUP DIALOGS ---
     if dialog.yesno("Setup (1/2): Trakt", "Authorize your main Trakt account?"):
         xbmc.executebuiltin('Addon.OpenSettings(script.trakt)')
         wait_for_settings_close()
 
     if xbmc.getCondVisibility('System.HasAddon(plugin.video.scrubsv2)'):
         if dialog.yesno("Setup (2/2): Scrubs V2", "Authorize Trakt inside Scrubs V2?"):
-            # Execute direct action
             xbmc.executebuiltin('RunPlugin(plugin://plugin.video.scrubsv2/?action=authTrakt)')
-            xbmc.sleep(12000) # Give the PIN popup time to render over the skin
+            xbmc.sleep(15000) 
 
-    # --- PHASE 3: PVR SYNC ---
+    # --- IPTV SYNC ---
     dp = xbmcgui.DialogProgress()
     dp.create("CordCutter", "Finalizing Build: Syncing Live TV Guide...")
     xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=run)')
@@ -71,14 +67,10 @@ def run_first_run_setup():
         dp.update(99, "Guide is still processing...\nAlmost done.")
 
     dp.close()
-    
-    # Cleanup trigger
     try: os.remove(trigger_file)
     except: pass
     
-    msg = "Setup complete! All background tasks and guide sync finished.\n\nRestart Kodi now?"
-    if dialog.yesno("Success!", msg):
+    if dialog.yesno("Success!", "Setup complete! Restart Kodi now?"):
         xbmc.executebuiltin('ShutDown')
 
-if __name__ == '__main__':
-    run_first_run_setup()
+if __name__ == '__main__': run_first_run_setup()
