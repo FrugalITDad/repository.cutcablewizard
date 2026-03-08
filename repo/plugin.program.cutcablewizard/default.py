@@ -1,5 +1,6 @@
 import xbmc, xbmcgui, xbmcaddon, xbmcvfs, os, shutil, urllib.request, json, ssl, zipfile
 
+# Addon Constants
 ADDON = xbmcaddon.Addon()
 ADDON_ID = ADDON.getAddonInfo('id')
 HOME = xbmcvfs.translatePath("special://home/")
@@ -15,17 +16,21 @@ def get_json(url):
         req = urllib.request.Request(url, headers={'User-Agent': 'Kodi-Wizard'})
         with urllib.request.urlopen(req, context=context, timeout=15) as r:
             return json.loads(r.read().decode('utf-8'))
-    except Exception as e:
+    except Exception:
         return None
 
 def smart_fresh_start(silent=False):
     if not silent:
-        if not xbmcgui.Dialog().yesno("Fresh Start", "Wipe current setup?"): return False
+        if not xbmcgui.Dialog().yesno("Fresh Start", "This will erase your current setup. Continue?"):
+            return False
+    
     for folder in ['addons', 'userdata']:
         path = os.path.join(HOME, folder)
         if not os.path.exists(path): continue
         for item in os.listdir(path):
-            if item in WHITELIST or item.startswith('repository.'): continue
+            # Do not delete the wizard itself or repositories
+            if item in WHITELIST or item.startswith('repository.'): 
+                continue
             full_path = os.path.join(path, item)
             try:
                 if os.path.isdir(full_path): shutil.rmtree(full_path, ignore_errors=True)
@@ -36,11 +41,15 @@ def smart_fresh_start(silent=False):
 def install_build(url, name, version):
     if not xbmcvfs.exists(TEMP_DIR): xbmcvfs.mkdirs(TEMP_DIR)
     zip_path = os.path.join(TEMP_DIR, "build.zip")
+    
+    # 1. Clean slate
     smart_fresh_start(silent=True)
+    
     dp = xbmcgui.DialogProgress()
-    dp.create("CordCutter", f"Downloading {name}...")
+    dp.create("CordCutter Wizard", f"Downloading {name}...")
 
     try:
+        # 2. Download Build
         context = ssl._create_unverified_context()
         with urllib.request.urlopen(url, context=context) as r, open(zip_path, 'wb') as f:
             total = int(r.info().get('Content-Length', 0))
@@ -50,41 +59,54 @@ def install_build(url, name, version):
                 if not chunk: break
                 f.write(chunk)
                 count += len(chunk)
-                if total > 0: dp.update(int(count*100/total), "Downloading...")
+                if total > 0: dp.update(int(count*100/total), "Downloading Build Data...")
+                if dp.iscanceled(): return
         
+        # 3. Extract Build
         with zipfile.ZipFile(zip_path, "r") as zf:
             files = zf.infolist()
+            total_files = len(files)
             for i, file in enumerate(files):
-                if i % 300 == 0: dp.update(int(i*100/len(files)), "Installing Files...")
+                if i % 300 == 0: 
+                    dp.update(int(i*100/total_files), f"Extracting: {file.filename[:30]}")
                 zf.extract(file, HOME)
 
+        # 4. Write trigger files to root for the service to find
         with open(os.path.join(HOME, 'firstrun.txt'), 'w') as f: f.write("pending")
         with open(os.path.join(HOME, 'installed_version.txt'), 'w') as f: f.write(version)
         
         dp.close()
         if os.path.exists(zip_path): os.remove(zip_path)
 
-        # NEW MESSAGE AS REQUESTED
+        # 5. The Hard Close (Crucial for Skin stability)
         xbmcgui.Dialog().ok("Install Complete", 
             "Build Applied! Kodi must now FORCE CLOSE to load the new skin.\n\n"
             "IMPORTANT: After you re-open Kodi, please wait about ONE MINUTE "
             "for the First Run Setup to automatically begin.")
+        
         os._exit(1) 
         
     except Exception as e:
         if dp: dp.close()
-        xbmcgui.Dialog().ok("Error", str(e))
+        xbmcgui.Dialog().ok("Error", f"Installation failed: {str(e)}")
 
 def main_menu():
     manifest = get_json(MANIFEST_URL)
     options = ["Install Build", "Check for Updates", "Fresh Start"]
     choice = xbmcgui.Dialog().select("CordCutter Wizard", options)
+    
     if choice == 0 and manifest:
         builds = manifest.get('builds', [])
         names = [f"{b['name']} (v{b['version']})" for b in builds]
         sel = xbmcgui.Dialog().select("Select Build", names)
-        if sel != -1: install_build(builds[sel]['download_url'], builds[sel]['name'], builds[sel]['version'])
+        if sel != -1: 
+            install_build(builds[sel]['download_url'], builds[sel]['name'], builds[sel]['version'])
+    elif choice == 1:
+        xbmcgui.Dialog().ok("Wizard", "Updates are checked automatically on startup.")
     elif choice == 2:
-        if smart_fresh_start(): os._exit(1)
+        if smart_fresh_start():
+            xbmcgui.Dialog().ok("Fresh Start", "Kodi will now close.")
+            os._exit(1)
 
-if __name__ == '__main__': main_menu()
+if __name__ == '__main__':
+    main_menu()
