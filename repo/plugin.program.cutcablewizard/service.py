@@ -1,15 +1,8 @@
-import xbmc, xbmcaddon, xbmcgui, xbmcvfs, os, json, ssl, urllib.request
+import xbmc, xbmcgui, xbmcvfs, os, json, ssl, urllib.request
 
-ADDON = xbmcaddon.Addon()
-ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
+# Look in HOME (root) for the trigger
+HOME = xbmcvfs.translatePath("special://home/")
 MANIFEST_URL = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
-
-def get_json(url):
-    try:
-        context = ssl._create_unverified_context()
-        with urllib.request.urlopen(url, context=context, timeout=10) as r:
-            return json.loads(r.read().decode('utf-8'))
-    except: return None
 
 def is_skin_busy():
     return (xbmc.getCondVisibility("Window.IsActive(busydialog)") or 
@@ -19,43 +12,47 @@ def is_skin_busy():
 def run_service():
     monitor = xbmc.Monitor()
     
-    # --- 45 SECOND SAFETY DELAY ---
+    # Wait 45s for hardware to settle
     if monitor.waitForAbort(45): return 
 
-    # --- PART 1: FIRST RUN SETUP ---
-    trigger = os.path.join(ADDON_DATA, 'firstrun.txt')
+    trigger = os.path.join(HOME, 'firstrun.txt')
+    
     if os.path.exists(trigger):
+        # Wait for any background skin loading to finish
         while is_skin_busy():
             if monitor.waitForAbort(5): return
+
+        # Force GUI refresh to ensure Aeon Nox Silvo is active
+        xbmc.executebuiltin('ReplaceWindow(10000)') 
         
         dialog = xbmcgui.Dialog()
-        # Device Name
-        name = dialog.input("Step 1: Device Name", defaultt="Kodi-Firestick").strip()
-        if name:
-            xbmc.executeJSONRPC(json.dumps({"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"services.devicename","value":name},"id":1}))
         
-        # Weather
-        if dialog.yesno("Setup", "Configure Weather (Gismeteo)?"):
+        # Step 1: Device Name
+        name = dialog.input("Setup (1/3): Device Name", defaultt="Kodi-Firestick").strip()
+        if name:
+            xbmc.executeJSONRPC(json.dumps({
+                "jsonrpc":"2.0",
+                "method":"Settings.SetSettingValue",
+                "params":{"setting":"services.devicename","value":name},
+                "id":1
+            }))
+        
+        # Step 2: Weather
+        if dialog.yesno("Setup (2/3)", "Configure Weather?"):
             dialog.ok("Weather", "Search city manually. Do NOT use 'Current Location'.")
             xbmc.executebuiltin("Addon.OpenSettings(weather.gismeteo)")
 
-        # PVR Sync
-        xbmc.executebuiltin("RunPlugin(plugin://plugin.program.iptvmerge/?mode=run)")
+        # Step 3: PVR/IPTV Sync
+        if xbmc.getCondVisibility("System.HasAddon(plugin.program.iptvmerge)"):
+            dialog.notification("PVR Sync", "Synchronizing Live TV Guide...", xbmcgui.NOTIFICATION_INFO, 5000)
+            xbmc.executebuiltin("RunPlugin(plugin://plugin.program.iptvmerge/?mode=run)")
         
+        # Cleanup
         try: os.remove(trigger)
         except: pass
+        
         xbmc.executebuiltin('SaveSceneSettings')
-
-    # --- PART 2: UPDATE CHECK ---
-    v_file = os.path.join(ADDON_DATA, 'installed_version.txt')
-    if os.path.exists(v_file):
-        with open(v_file) as f: current = f.read().strip()
-        manifest = get_json(MANIFEST_URL)
-        if manifest:
-            for build in manifest.get('builds', []):
-                if build['version'] != current:
-                    xbmcgui.Dialog().notification("Wizard", f"New update available: v{build['version']}", xbmcgui.NOTIFICATION_INFO, 5000)
-                    break
+        dialog.ok("Setup Complete", "Your CordCutter build is ready to use!")
 
 if __name__ == '__main__':
     run_service()
