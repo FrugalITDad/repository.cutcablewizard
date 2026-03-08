@@ -124,11 +124,29 @@ def smart_fresh_start(silent=False):
             except Exception:
                 pass
 
-    # ── Apply Kodi settings ───────────────────────────────────────────────
-    # Unknown Sources ON
-    set_kodi_setting('addons.unknownsources', True)
-    # Addon updates from Any Repositories  (0=off, 1=official only, 2=any)
-    set_kodi_setting('general.addonupdates', 2)
+    # ── Clean up HOME root trigger files so they don't fire after the wipe ─
+    # firstrun.txt must be deleted here — if a build was previously installed
+    # it would survive the folder wipes and wrongly trigger First Run setup
+    # on the next boot.
+    for trigger in ['firstrun.txt', 'installed_version.txt', 'last_update_check.txt']:
+        path = os.path.join(HOME, trigger)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+    # ── Write post-fresh-start trigger ────────────────────────────────────
+    # We CANNOT apply Kodi settings (unknown sources, addon updates) here
+    # because guisettings.xml was just deleted and os._exit(1) is called
+    # immediately after — any in-memory changes would be lost.
+    # service.py detects this trigger on the next boot and applies the
+    # settings once Kodi is fully initialised with a fresh database.
+    try:
+        with open(os.path.join(HOME, 'post_fresh_start.txt'), 'w') as f:
+            f.write("pending")
+    except Exception:
+        pass
 
     return True
 
