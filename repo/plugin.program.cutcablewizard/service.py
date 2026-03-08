@@ -253,15 +253,8 @@ def run_first_time_setup(monitor):
     if dialog.yesno("Setup (3/5): Subtitles", "Enable automatic subtitles?"):
         set_kodi_setting("subtitles.enabled", True)
 
-    # ── Step 4: Trakt (only offered if installed) ─────────────────────────
-    if is_addon_installed("script.trakt"):
-        if dialog.yesno("Setup (4/5): Trakt", "Would you like to authorize your Trakt account?"):
-            xbmc.executebuiltin("Addon.OpenSettings(script.trakt)")
-            wait_for_trakt_auth(monitor)  # Handles settings + auth window + confirm
-    else:
-        xbmc.log("[CutCableWizard] script.trakt not installed – skipping Trakt step.", xbmc.LOGINFO)
-
-    # ── Step 5: IPTV Guide Sync ───────────────────────────────────────────
+    # ── Step 4: IPTV Guide Sync ───────────────────────────────────────────
+    # Runs before Trakt so the 145s countdown completes with no interruptions.
     xbmc.executebuiltin("RunPlugin(plugin://plugin.program.iptv.merge/?mode=run)")
 
     dp = xbmcgui.DialogProgress()
@@ -271,11 +264,22 @@ def run_first_time_setup(monitor):
     for i in range(total_time):
         if monitor.waitForAbort(1) or dp.iscanceled():
             break
-        percent    = int((i / float(total_time)) * 100)
-        remaining  = total_time - i
+        percent   = int((i / float(total_time)) * 100)
+        remaining = total_time - i
         dp.update(percent, f"Finalizing IPTV Guide setup...\nTime remaining: {remaining}s")
 
     dp.close()
+
+    # ── Step 5: Trakt (last so its auth window has no other dialogs to clash with) ─
+    # The authorization flow opens a device-code window that requires the user
+    # to visit trakt.tv/activate in a browser. Placing this last means the
+    # countdown is already done and nothing will interrupt or cover the auth window.
+    if is_addon_installed("script.trakt"):
+        if dialog.yesno("Setup (5/5): Trakt", "Would you like to authorize your Trakt account?"):
+            xbmc.executebuiltin("Addon.OpenSettings(script.trakt)")
+            wait_for_trakt_auth(monitor)  # Handles settings + auth window + confirm
+    else:
+        xbmc.log("[CutCableWizard] script.trakt not installed – skipping Trakt step.", xbmc.LOGINFO)
 
     # ── Cleanup & finish ──────────────────────────────────────────────────
     try:
@@ -287,6 +291,7 @@ def run_first_time_setup(monitor):
     dialog.ok(
         "Setup Complete",
         "Your CordCutter build is fully configured and ready to use!\n\n"
+        "[B]Note:[/B] Your weather location will not appear until the next time you restart Kodi.\n\n"
         "Enjoy your new setup."
     )
     xbmc.log("[CutCableWizard] First Run setup complete.", xbmc.LOGINFO)
