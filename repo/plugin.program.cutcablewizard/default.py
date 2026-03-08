@@ -1,4 +1,4 @@
-import xbmc, xbmcgui, xbmcaddon, xbmcvfs, os, shutil, urllib.request, json, ssl, zipfile
+import xbmc, xbmcgui, xbmcaddon, os, shutil, urllib.request, json, ssl, zipfile, xbmcvfs
 
 # ---------------------------------------------------------------------------
 # Addon Constants
@@ -155,8 +155,15 @@ def smart_fresh_start(silent=False):
 # Build Installation
 # ---------------------------------------------------------------------------
 def install_build(url, name, version, build_id):
-    if not xbmcvfs.exists(TEMP_DIR):
-        xbmcvfs.mkdirs(TEMP_DIR)
+    # Use os.makedirs so the directory is guaranteed to exist at the native
+    # filesystem level — the same layer used by Python's open() below.
+    # xbmcvfs.mkdirs() operates via Kodi's VFS and on Android the two layers
+    # don't always agree, causing "no such file or directory" on the zip write.
+    try:
+        os.makedirs(TEMP_DIR, exist_ok=True)
+    except Exception as e:
+        xbmcgui.Dialog().ok("Error", f"Could not create temp directory:\n{TEMP_DIR}\n\n{str(e)}")
+        return
     zip_path = os.path.join(TEMP_DIR, "build.zip")
 
     # Wipe first (silent – user already confirmed via build selection)
