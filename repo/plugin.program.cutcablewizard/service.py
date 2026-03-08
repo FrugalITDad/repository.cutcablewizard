@@ -301,18 +301,23 @@ def run_service():
     monitor = xbmc.Monitor()
     xbmc.log("[CutCableWizard] Service started.", xbmc.LOGINFO)
 
-    # ── Post Fresh Start (highest priority — must run before anything else) ─
-    # Detected on the first boot after a fresh start wipe. Re-enables the
+    # ── Post Fresh Start ──────────────────────────────────────────────────
+    # Runs on first boot after a manual fresh start wipe. Re-enables the
     # wizard/repo and applies Unknown Sources + Any Repositories settings.
+    # Uses its own if (not elif) so that if firstrun.txt also exists somehow
+    # it is still caught in the next block.
     if os.path.exists(POST_FRESH_START_FILE):
         run_post_fresh_start(monitor)
 
     # ── First Run setup (only when a build was just installed) ────────────
-    elif os.path.exists(FIRSTRUN_FILE):
+    # Separate if (not elif) so it always runs when firstrun.txt is present,
+    # regardless of whether post_fresh_start also ran above.
+    if os.path.exists(FIRSTRUN_FILE):
         run_first_time_setup(monitor)
 
     # ── Daily update check ────────────────────────────────────────────────
-    elif should_check_for_updates():
+    # Only runs when neither setup trigger is present.
+    elif not os.path.exists(POST_FRESH_START_FILE) and should_check_for_updates():
         # Give Kodi a moment to fully load before showing any dialog
         if not monitor.waitForAbort(15):
             run_update_check()

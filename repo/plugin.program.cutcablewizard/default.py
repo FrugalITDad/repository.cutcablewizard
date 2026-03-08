@@ -134,17 +134,18 @@ def smart_fresh_start(silent=False):
         except Exception:
             pass
 
-    # ── Write post-fresh-start trigger ────────────────────────────────────
-    # We CANNOT apply Kodi settings (unknown sources, addon updates) here
-    # because guisettings.xml was just deleted and os._exit(1) is called
-    # immediately after — any in-memory changes would be lost.
-    # service.py detects this trigger on the next boot and applies the
-    # settings once Kodi is fully initialised with a fresh database.
-    try:
-        with open(os.path.join(HOME, 'post_fresh_start.txt'), 'w') as f:
-            f.write("pending")
-    except Exception:
-        pass
+    # ── Write post-fresh-start trigger (manual fresh start only) ─────────
+    # Only written when the user explicitly chose Fresh Start from the menu.
+    # During a silent build-install wipe (silent=True) we do NOT write this
+    # because the build zip brings its own guisettings.xml, and firstrun.txt
+    # handles first-run setup. Writing post_fresh_start.txt during a build
+    # install causes service.py to skip firstrun.txt on the next boot.
+    if not silent:
+        try:
+            with open(os.path.join(HOME, 'post_fresh_start.txt'), 'w') as f:
+                f.write("pending")
+        except Exception:
+            pass
 
     return True
 
