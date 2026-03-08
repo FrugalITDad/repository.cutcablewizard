@@ -3,11 +3,9 @@ import xbmc, xbmcgui, xbmcaddon, os, shutil, urllib.request, json, ssl, zipfile,
 # ---------------------------------------------------------------------------
 # Addon Constants
 # ---------------------------------------------------------------------------
-ADDON      = xbmcaddon.Addon()
-ADDON_ID   = ADDON.getAddonInfo('id')
-HOME       = xbmcvfs.translatePath("special://home/")
-ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
-TEMP_DIR   = xbmcvfs.translatePath("special://temp/")
+ADDON    = xbmcaddon.Addon()
+ADDON_ID = ADDON.getAddonInfo('id')
+HOME     = xbmcvfs.translatePath("special://home/")
 
 MANIFEST_URL = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
 
@@ -155,16 +153,13 @@ def smart_fresh_start(silent=False):
 # Build Installation
 # ---------------------------------------------------------------------------
 def install_build(url, name, version, build_id):
-    # Use os.makedirs so the directory is guaranteed to exist at the native
-    # filesystem level — the same layer used by Python's open() below.
-    # xbmcvfs.mkdirs() operates via Kodi's VFS and on Android the two layers
-    # don't always agree, causing "no such file or directory" on the zip write.
-    try:
-        os.makedirs(TEMP_DIR, exist_ok=True)
-    except Exception as e:
-        xbmcgui.Dialog().ok("Error", f"Could not create temp directory:\n{TEMP_DIR}\n\n{str(e)}")
-        return
-    zip_path = os.path.join(TEMP_DIR, "build.zip")
+    # Write the zip directly to HOME which is guaranteed to exist and be
+    # writable on all Android/FireTV devices. special://temp/ resolves to a
+    # path that Kodi may not have created yet, causing the "no such file"
+    # error even after makedirs — HOME has no such issue.
+    zip_path = os.path.join(HOME, "build.zip")
+    xbmc.log(f"[CutCableWizard] Zip download path: {zip_path}", xbmc.LOGINFO)
+    xbmc.log(f"[CutCableWizard] HOME exists: {os.path.exists(HOME)}", xbmc.LOGINFO)
 
     # Wipe first (silent – user already confirmed via build selection)
     smart_fresh_start(silent=True)
