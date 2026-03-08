@@ -68,6 +68,67 @@ def wait_for_settings_dialog(monitor):
             break
 
 
+def wait_for_trakt_auth(monitor):
+    """
+    Trakt-specific wait that handles three phases:
+
+    Phase 1 - Settings window:
+        Wait for the Trakt settings dialog to close. The user may close
+        it without authorizing (fine), or Trakt may close it automatically
+        when the user clicks Authorize.
+
+    Phase 2 - Authorization window:
+        After settings close, Trakt opens a custom device-code window.
+        We use System.HasModalDialog to detect ANY modal appearing within
+        8 seconds - this catches Trakt's auth window regardless of its ID.
+        Checking specific window IDs is unreliable as Trakt uses a custom
+        addon window that does not match standard Kodi dialog IDs.
+        Once detected, we wait for it to fully clear before continuing.
+
+    Phase 3 - Confirmation prompt:
+        Trakt authorization requires visiting trakt.tv/activate in a browser.
+        We show an OK prompt so the user controls when first-run continues.
+    """
+    # Phase 1: wait for settings window to close
+    xbmc.sleep(2000)
+    while xbmc.getCondVisibility("Window.IsActive(addonsettings)"):
+        if monitor.waitForAbort(1):
+            return
+
+    # Phase 2a: poll for up to 8 seconds for Trakt's auth window to appear.
+    # Short 500ms intervals so we react quickly once it opens.
+    auth_appeared = False
+    for _ in range(16):
+        if monitor.waitForAbort(0):
+            return
+        if xbmc.getCondVisibility("System.HasModalDialog(true)"):
+            auth_appeared = True
+            break
+        xbmc.sleep(500)
+
+    # Phase 2b: auth window appeared - wait for it to fully close.
+    # 5 minute timeout matches Trakt device-code expiry.
+    if auth_appeared:
+        AUTH_TIMEOUT = 300
+        elapsed = 0
+        while elapsed < AUTH_TIMEOUT:
+            if not xbmc.getCondVisibility("System.HasModalDialog(true)"):
+                break
+            if monitor.waitForAbort(2):
+                return
+            elapsed += 2
+
+    # Phase 3: show confirmation so the user controls when first-run continues.
+    # Trakt requires opening trakt.tv/activate on another device - the user
+    # needs time to complete that step before setup moves on.
+    xbmcgui.Dialog().ok(
+        "Setup (4/5): Trakt",
+        "Trakt authorization window has closed.\n\n"
+        "If you still need to authorize in your browser, do that now.\n\n"
+        "Tap [B]OK[/B] when you are ready to continue setup."
+    )
+
+
 def get_json(url):
     try:
         context = ssl._create_unverified_context()
@@ -192,7 +253,7 @@ def run_first_time_setup(monitor):
     if is_addon_installed("script.trakt"):
         if dialog.yesno("Setup (4/5): Trakt", "Would you like to authorize your Trakt account?"):
             xbmc.executebuiltin("Addon.OpenSettings(script.trakt)")
-            wait_for_settings_dialog(monitor)
+            wait_for_trakt_auth(monitor)  # Handles settings + auth window + confirm
     else:
         xbmc.log("[CutCableWizard] script.trakt not installed – skipping Trakt step.", xbmc.LOGINFO)
 
