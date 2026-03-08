@@ -13,7 +13,7 @@ def wait_for_settings_close():
     xbmc.sleep(1500)
 
 def is_skin_busy():
-    # 10101 = Skin Shortcuts, infodialog = Busy/Building notifications
+    # Checks if Skin Shortcuts is building or if a progress/busy dialog is up
     return (xbmc.getCondVisibility('Window.IsActive(10101)') or 
             xbmc.getCondVisibility('Library.IsScanning') or
             xbmc.getCondVisibility('Window.IsActive(infodialog)'))
@@ -22,21 +22,22 @@ def run_first_run_setup():
     monitor = xbmc.Monitor()
     
     # --- PHASE 0: THE 45-SECOND BOOT DELAY ---
+    # This specifically waits for the system to settle before any popups appear.
     if monitor.waitForAbort(45): return
-
-    # Ensure Unknown Sources is enabled
-    xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"addons.unknownsources","value":true},"id":1}')
 
     addon_data = get_addon_data()
     trigger_file = os.path.join(addon_data, 'firstrun.txt')
+    
+    # If the build wasn't just installed, exit early
     if not os.path.exists(trigger_file): return
 
     # --- PHASE 1: THE IDLE SAFETY LOOP ---
+    # Even after 45s, we check if Skin Shortcuts is still building menus
     while is_skin_busy():
         if monitor.waitForAbort(5): return
-        xbmc.log("WIZARD: Waiting for Skin Shortcuts to finish...", xbmc.LOGINFO)
+        xbmc.log("WIZARD: Waiting for menus to finish building...", xbmc.LOGINFO)
 
-    xbmc.sleep(5000) 
+    xbmc.sleep(2000) 
     dialog = xbmcgui.Dialog()
 
     # --- STEP 1: DEVICE NAME ---
@@ -44,31 +45,33 @@ def run_first_run_setup():
     if device_name:
         xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"services.devicename","value":"%s"},"id":1}' % device_name)
 
-    # --- STEP 2: WEATHER (Restored Logic) ---
-    if dialog.yesno("Setup (3/4): Weather", "Would you like to configure your weather location?"):
+    # --- STEP 2: WEATHER ---
+    if dialog.yesno("Setup (2/5): Weather", "Would you like to configure your weather location?"):
         dialog.ok("Weather Hint", "Search for your city manually. Do NOT use 'Current Location'.")
         xbmc.executebuiltin('Addon.OpenSettings(weather.gismeteo)')
         wait_for_settings_close()
 
-    # --- STEP 4: TRAKT (Standard Plugin) ---
-    if dialog.yesno("Step 4: Trakt", "Authorize your main Trakt account?"):
+    # --- STEP 3: SUBTITLES (Restored) ---
+    if dialog.yesno("Setup (3/5): Subtitles", "Enable automatic subtitles for movies and TV shows?"):
+        xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"subtitles.enabled","value":true},"id":1}')
+
+    # --- STEP 4: TRAKT ---
+    if dialog.yesno("Setup (4/5): Trakt", "Authorize your main Trakt account?"):
         xbmc.executebuiltin('Addon.OpenSettings(script.trakt)')
         wait_for_settings_close()
 
-    # --- STEP 5: SCRUBS V2 (Updated Logic) ---
+    # --- STEP 5: SCRUBS V2 ---
     if xbmc.getCondVisibility('System.HasAddon(plugin.video.scrubsv2)'):
-        if dialog.yesno("Step 5: Scrubs V2", "Authorize Trakt inside Scrubs V2?"):
-            # Guide the user before jumping in
+        if dialog.yesno("Setup (5/5): Scrubs V2", "Authorize Trakt inside Scrubs V2?"):
             dialog.ok("Scrubs V2 Trakt", "The Tools menu will now open.\n\nPlease select 'Trakt: Authorize' from the list.")
-            # Navigate directly to the Scrubs Tools menu
             xbmc.executebuiltin('ActivateWindow(Videos,"plugin://plugin.video.scrubsv2/?action=tools_menu",return)')
-            # This loop waits for the user to finish in the Scrubs menu before continuing
+            # Wait for user to finish and back out of the video window
             while xbmc.getCondVisibility('Window.IsActive(videos)'):
                 if monitor.waitForAbort(1): break
 
     # --- PHASE 3: PVR SYNC ---
     dp = xbmcgui.DialogProgress()
-    dp.create("CordCutter", "Finalizing Build: Syncing Live TV Guide...")
+    dp.create("CordCutter", "Finalizing: Syncing Live TV Guide...")
     xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=run)')
 
     total_wait = 145 
@@ -76,13 +79,9 @@ def run_first_run_setup():
         if monitor.waitForAbort(1): break
         percent = int(((total_wait - i) / float(total_wait)) * 100)
         dp.update(percent, f"Syncing Guide... {i}s remaining.")
-
-    while xbmc.getCondVisibility('PVR.IsUpdatingGuide'):
-        if monitor.waitForAbort(3): break
-        dp.update(99, "Guide is still processing...\nAlmost done.")
-
     dp.close()
     
+    # Clean up the trigger so it doesn't run every boot
     try: os.remove(trigger_file)
     except: pass
     
