@@ -1,30 +1,29 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <addon id="plugin.program.cutcablewizard"
        name="CutCableWizard"
-       version="2.0.8"
+       version="2.0.9"
        provider-name="FrugalITDad">
     <requires>
         <import addon="xbmc.python" version="3.0.0" />
-        <import addon="pvr.iptvsimple" />
-        <import addon="inputstream.adaptive" />
-        <import addon="inputstream.ffmpegdirect" />
-        <import addon="inputstream.rtmp" />
+        <import addon="pvr.iptvsimple" optional="true" />
+        <import addon="inputstream.adaptive" optional="true" />
+        <import addon="inputstream.ffmpegdirect" optional="true" />
+        <import addon="inputstream.rtmp" optional="true" />
+        <import addon="plugin.program.iptv.merge" optional="true" />
         <import addon="plugin.video.scrubsv2" optional="true" />
         <import addon="script.trakt" optional="true" />
-        <import addon="plugin.video.iptvmerge" optional="true" />
     </requires>
-    
+
     <extension point="xbmc.python.pluginsource" library="default.py">
         <provides>executable</provides>
     </extension>
-
     <extension point="xbmc.service" library="service.py" start="login" />
-
     <extension point="xbmc.addon.metadata">
-        <summary lang="en_US">CordCutter builds wizard</summary>
+        <summary lang="en_US">CordCutter Builds Wizard</summary>
         <description lang="en_US">
-            Installs and manages CordCutter builds optimized for Fire Stick migration. 
-            Includes auto-sanitization for PVR and InputStream binaries.
+            Installs and manages CordCutter builds for Fire TV and Google TV devices running Kodi 21.
+            Features automatic daily update notifications, a full fresh start tool,
+            and a guided first-run setup for Live TV, Weather, Subtitles, and Trakt.
         </description>
         <platform>all</platform>
         <language>en_US</language>
