@@ -153,23 +153,41 @@ def smart_fresh_start(silent=False):
 # ---------------------------------------------------------------------------
 # Build Installation
 # ---------------------------------------------------------------------------
+
+# Human-readable names for build IDs used in the switch-build warning.
+BUILD_NAMES = {
+    'cordcutter_base': 'CordCutter Base',
+    'cordcutter_plus': 'CordCutter Plus',
+}
+
 def install_build(url, name, version, build_id):
-    # Write the zip directly to HOME which is guaranteed to exist and be
-    # writable on all Android/FireTV devices. special://temp/ resolves to a
-    # path that Kodi may not have created yet, causing the "no such file"
-    # error even after makedirs — HOME has no such issue.
     zip_path = os.path.join(HOME, "build.zip")
     xbmc.log(f"[CutCableWizard] Zip download path: {zip_path}", xbmc.LOGINFO)
     xbmc.log(f"[CutCableWizard] HOME exists: {os.path.exists(HOME)}", xbmc.LOGINFO)
 
-    # Wipe first (silent – user already confirmed via build selection)
-    smart_fresh_start(silent=True)
+    # ── 0. Warn if a different build is already installed ─────────────────
+    # Reads installed_version.txt to check what is currently on the device.
+    # If it is a different build (not just a version update of the same one)
+    # we show a clear warning so the user knows what will be replaced.
+    installed_id, installed_version = get_installed_info()
+    if installed_id and installed_id != build_id:
+        installed_name = BUILD_NAMES.get(installed_id, installed_id)
+        if not xbmcgui.Dialog().yesno(
+            "Replace Existing Build?",
+            f"You currently have [B]{installed_name} v{installed_version}[/B] installed.\n\n"
+            f"Installing [B]{name} v{version}[/B] will completely replace it and "
+            f"wipe your current setup.\n\n"
+            "Are you sure you want to continue?"
+        ):
+            return  # User cancelled — leave current build untouched
 
     dp = xbmcgui.DialogProgress()
     dp.create("CordCutter Wizard", f"Downloading {name}...")
 
     try:
         # ── 1. Download ───────────────────────────────────────────────────
+        # Download is done BEFORE the wipe. If the download fails the user's
+        # existing Kodi setup is left completely intact — nothing is lost.
         context = ssl._create_unverified_context()
         with urllib.request.urlopen(url, context=context) as r, open(zip_path, 'wb') as f:
             total = int(r.info().get('Content-Length', 0))
@@ -183,9 +201,38 @@ def install_build(url, name, version, build_id):
                 if total > 0:
                     dp.update(int(count * 100 / total), f"Downloading {name}...")
                 if dp.iscanceled():
+                    if os.path.exists(zip_path):
+                        os.remove(zip_path)
+                    dp.close()
                     return
 
-        # ── 2. Extract ────────────────────────────────────────────────────
+        # ── 2. Verify zip before wiping ───────────────────────────────────
+        # Confirms the downloaded file is a valid zip. If it is corrupt or
+        # incomplete the wipe is aborted and the user keeps their current setup.
+        dp.update(0, "Verifying download...")
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                bad_file = zf.testzip()
+            if bad_file:
+                raise zipfile.BadZipFile(f"Corrupt file in zip: {bad_file}")
+        except zipfile.BadZipFile as e:
+            dp.close()
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+            xbmcgui.Dialog().ok(
+                "Download Error",
+                f"The downloaded build file appears to be corrupt.\n\n"
+                f"{str(e)}\n\n"
+                "Your existing setup has not been touched. Please try again."
+            )
+            return
+
+        # ── 3. Wipe ───────────────────────────────────────────────────────
+        # Only reached if download and verification both succeeded.
+        dp.update(0, "Preparing for installation...")
+        smart_fresh_start(silent=True)
+
+        # ── 4. Extract ────────────────────────────────────────────────────
         dp.update(0, "Extracting build files...")
         with zipfile.ZipFile(zip_path, "r") as zf:
             files = zf.infolist()
@@ -198,11 +245,9 @@ def install_build(url, name, version, build_id):
                     )
                 zf.extract(zipped_file, HOME)
 
-        # ── 3. Write trigger files ────────────────────────────────────────
+        # ── 5. Write trigger files ────────────────────────────────────────
         with open(os.path.join(HOME, 'firstrun.txt'), 'w') as f:
             f.write("pending")
-        # Store build_id|version so the update checker knows which build
-        # is installed and can compare against the manifest correctly.
         with open(os.path.join(HOME, 'installed_version.txt'), 'w') as f:
             f.write(f"{build_id}|{version}")
 
@@ -210,7 +255,7 @@ def install_build(url, name, version, build_id):
         if os.path.exists(zip_path):
             os.remove(zip_path)
 
-        # ── 4. Inform user then force-close ───────────────────────────────
+        # ── 6. Inform user then force-close ───────────────────────────────
         xbmcgui.Dialog().ok(
             "Install Complete",
             f"[B]{name} v{version}[/B] has been applied!\n\n"
@@ -224,7 +269,11 @@ def install_build(url, name, version, build_id):
         dp.close()
         if os.path.exists(zip_path):
             os.remove(zip_path)
-        xbmcgui.Dialog().ok("Installation Error", f"Installation failed:\n\n{str(e)}")
+        xbmcgui.Dialog().ok(
+            "Installation Error",
+            f"Installation failed:\n\n{str(e)}\n\n"
+            "Your existing setup has not been modified."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -280,8 +329,22 @@ def main_menu():
             return
         # Filter out admin-only builds for regular users
         builds = [b for b in manifest.get('builds', []) if not b.get('admin_only', False)]
-        names  = [f"{b['name']} (v{b['version']})" for b in builds]
-        sel    = xbmcgui.Dialog().select("Select a Build", names)
+
+        # Build a ListItem per build so the select dialog shows:
+        #   Line 1 (label)  — Name, version and size
+        #   Line 2 (label2) — Description from builds.json
+        # Requires useDetails=True which is supported from Kodi 19 onwards.
+        items = []
+        for b in builds:
+            size_mb = b.get('size_mb', 0)
+            size_str = f"{size_mb} MB" if size_mb else "Unknown size"
+            item = xbmcgui.ListItem(
+                label  = f"{b['name']}  |  v{b['version']}  |  {size_str}",
+                label2 = b.get('description', '')
+            )
+            items.append(item)
+
+        sel = xbmcgui.Dialog().select("Select a Build", items, useDetails=True)
         if sel != -1:
             install_build(
                 builds[sel]['download_url'],

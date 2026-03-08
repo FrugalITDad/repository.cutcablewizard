@@ -270,16 +270,39 @@ def run_first_time_setup(monitor):
 
     dp.close()
 
-    # ── Step 5: Trakt (last so its auth window has no other dialogs to clash with) ─
-    # The authorization flow opens a device-code window that requires the user
-    # to visit trakt.tv/activate in a browser. Placing this last means the
-    # countdown is already done and nothing will interrupt or cover the auth window.
+    # ── Step 5: Trakt ────────────────────────────────────────────────────
+    # Auth window has the full screen to itself with the countdown already done.
     if is_addon_installed("script.trakt"):
-        if dialog.yesno("Setup (5/5): Trakt", "Would you like to authorize your Trakt account?"):
+        if dialog.yesno("Setup (5/6): Trakt", "Would you like to authorize your Trakt account?"):
             xbmc.executebuiltin("Addon.OpenSettings(script.trakt)")
             wait_for_trakt_auth(monitor)  # Handles settings + auth window + confirm
     else:
         xbmc.log("[CutCableWizard] script.trakt not installed – skipping Trakt step.", xbmc.LOGINFO)
+
+    # ── Step 6: Scrubs V2 Trakt (Plus build only — skipped if not installed) ─
+    # Scrubs V2 has its own separate Trakt authorization inside its Tools menu.
+    # We open the Tools menu directly and wait for the user to back out before
+    # continuing, so the completion message never appears while it is still open.
+    if xbmc.getCondVisibility("System.HasAddon(plugin.video.scrubsv2)"):
+        if dialog.yesno(
+            "Setup (6/6): Scrubs V2",
+            "Would you like to authorize Trakt inside Scrubs V2?"
+        ):
+            dialog.ok(
+                "Scrubs V2 - Trakt Authorization",
+                "The Scrubs V2 Tools menu will now open.\n\n"
+                "Select [B]Trakt: Authorize[/B] from the list, complete the "
+                "authorization, then press Back to continue setup."
+            )
+            xbmc.executebuiltin(
+                'ActivateWindow(Videos,"plugin://plugin.video.scrubsv2/?action=tools_menu",return)'
+            )
+            # Wait for the user to back out of the Scrubs V2 tools window
+            while xbmc.getCondVisibility("Window.IsActive(videos)"):
+                if monitor.waitForAbort(1):
+                    break
+    else:
+        xbmc.log("[CutCableWizard] plugin.video.scrubsv2 not installed – skipping Scrubs V2 step.", xbmc.LOGINFO)
 
     # ── Cleanup & finish ──────────────────────────────────────────────────
     try:
