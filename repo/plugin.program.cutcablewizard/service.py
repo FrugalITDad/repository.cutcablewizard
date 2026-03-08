@@ -1,93 +1,79 @@
-import xbmc, xbmcvfs, os, xbmcgui, json
+import xbmc
+import xbmcaddon
+import xbmcgui
+import urllib.request
+import json
+import os
 
-ADDON_ID = 'plugin.program.cutcablewizard'
+ADDON = xbmcaddon.Addon()
+ADDON_DATA = xbmc.translatePath(ADDON.getAddonInfo("profile"))
 
-def get_addon_data():
-    return xbmcvfs.translatePath('special://profile/addon_data/' + ADDON_ID)
+MANIFEST_URL = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
 
-def wait_for_settings_close():
-    monitor = xbmc.Monitor()
-    xbmc.sleep(2000) 
-    while xbmc.getCondVisibility('Window.IsActive(addonsettings)'):
-        if monitor.waitForAbort(1): break
-    xbmc.sleep(1500)
+
+def get_json(url):
+
+    try:
+        with urllib.request.urlopen(url) as r:
+            return json.loads(r.read().decode())
+    except:
+        return None
+
 
 def is_skin_busy():
-    # Checks if Skin Shortcuts is building or if a progress/busy dialog is up
-    return (xbmc.getCondVisibility('Window.IsActive(10101)') or 
-            xbmc.getCondVisibility('Library.IsScanning') or
-            xbmc.getCondVisibility('Window.IsActive(infodialog)'))
 
-def run_first_run_setup():
-    monitor = xbmc.Monitor()
-    
-    # --- PHASE 0: THE 45-SECOND BOOT DELAY ---
-    # This specifically waits for the system to settle before any popups appear.
-    if monitor.waitForAbort(45): return
+    return (
+        xbmc.getCondVisibility("Window.IsActive(busydialog)") or
+        xbmc.getCondVisibility("Library.IsScanningVideo") or
+        xbmc.getCondVisibility("Library.IsScanningMusic")
+    )
 
-    addon_data = get_addon_data()
-    trigger_file = os.path.join(addon_data, 'firstrun.txt')
-    
-    # If the build wasn't just installed, exit early
-    if not os.path.exists(trigger_file): return
 
-    # --- PHASE 1: THE IDLE SAFETY LOOP ---
-    # Even after 45s, we check if Skin Shortcuts is still building menus
+def check_for_build_update():
+
+    version_file = os.path.join(ADDON_DATA, "installed_version.txt")
+
+    if not os.path.exists(version_file):
+        return
+
+    try:
+        with open(version_file) as f:
+            current = f.read().strip()
+    except:
+        return
+
+    manifest = get_json(MANIFEST_URL)
+
+    if not manifest:
+        return
+
+    builds = manifest.get("builds", [])
+
+    for build in builds:
+
+        latest = build.get("version")
+
+        if latest and latest != current:
+
+            xbmcgui.Dialog().notification(
+                "CordCutter Wizard",
+                f"New build available: {latest}",
+                xbmcgui.NOTIFICATION_INFO,
+                5000
+            )
+
+            break
+
+
+def run_service():
+
+    xbmc.sleep(15000)
+
     while is_skin_busy():
-        if monitor.waitForAbort(5): return
-        xbmc.log("WIZARD: Waiting for menus to finish building...", xbmc.LOGINFO)
+        xbmc.sleep(2000)
 
-    xbmc.sleep(2000) 
-    dialog = xbmcgui.Dialog()
+    check_for_build_update()
 
-    # --- STEP 1: DEVICE NAME ---
-    device_name = dialog.input("Step 1: Set Device Name", defaultt="Kodi-Firestick")
-    if device_name:
-        xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"services.devicename","value":"%s"},"id":1}' % device_name)
 
-    # --- STEP 2: WEATHER ---
-    if dialog.yesno("Setup (2/5): Weather", "Would you like to configure your weather location?"):
-        dialog.ok("Weather Hint", "Search for your city manually. Do NOT use 'Current Location'.")
-        xbmc.executebuiltin('Addon.OpenSettings(weather.gismeteo)')
-        wait_for_settings_close()
-
-    # --- STEP 3: SUBTITLES (Restored) ---
-    if dialog.yesno("Setup (3/5): Subtitles", "Enable automatic subtitles for movies and TV shows?"):
-        xbmc.executeJSONRPC('{"jsonrpc":"2.0","method":"Settings.SetSettingValue","params":{"setting":"subtitles.enabled","value":true},"id":1}')
-
-    # --- STEP 4: TRAKT ---
-    if dialog.yesno("Setup (4/5): Trakt", "Authorize your main Trakt account?"):
-        xbmc.executebuiltin('Addon.OpenSettings(script.trakt)')
-        wait_for_settings_close()
-
-    # --- STEP 5: SCRUBS V2 ---
-    if xbmc.getCondVisibility('System.HasAddon(plugin.video.scrubsv2)'):
-        if dialog.yesno("Setup (5/5): Scrubs V2", "Authorize Trakt inside Scrubs V2?"):
-            dialog.ok("Scrubs V2 Trakt", "The Tools menu will now open.\n\nPlease select 'Trakt: Authorize' from the list.")
-            xbmc.executebuiltin('ActivateWindow(Videos,"plugin://plugin.video.scrubsv2/?action=tools_menu",return)')
-            # Wait for user to finish and back out of the video window
-            while xbmc.getCondVisibility('Window.IsActive(videos)'):
-                if monitor.waitForAbort(1): break
-
-    # --- PHASE 3: PVR SYNC ---
-    dp = xbmcgui.DialogProgress()
-    dp.create("CordCutter", "Finalizing: Syncing Live TV Guide...")
-    xbmc.executebuiltin('RunPlugin(plugin.program.iptvmerge, ?mode=run)')
-
-    total_wait = 145 
-    for i in range(total_wait, 0, -1):
-        if monitor.waitForAbort(1): break
-        percent = int(((total_wait - i) / float(total_wait)) * 100)
-        dp.update(percent, f"Syncing Guide... {i}s remaining.")
-    dp.close()
-    
-    # Clean up the trigger so it doesn't run every boot
-    try: os.remove(trigger_file)
-    except: pass
-    
-    xbmc.executebuiltin('SaveSceneSettings') 
-    if dialog.yesno("Success!", "Setup complete! Restart Kodi now?"):
-        xbmc.executebuiltin('ShutDown')
-
-if __name__ == '__main__':
-    run_first_run_setup()
+if __name__ == "__main__":
+    run_service()
