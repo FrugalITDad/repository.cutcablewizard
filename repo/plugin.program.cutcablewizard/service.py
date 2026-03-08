@@ -97,9 +97,13 @@ def wait_for_trakt_auth(monitor):
 
     # Phase 2a: poll for up to 8 seconds for Trakt's auth window to appear.
     # Short 500ms intervals so we react quickly once it opens.
+    # abortRequested() is used instead of waitForAbort(0) — a zero timeout
+    # is undefined in Kodi's Python API and on Android can return True
+    # immediately, falsely flagging an abort that then causes all subsequent
+    # waitForAbort() calls (including the Step 5 countdown) to exit early.
     auth_appeared = False
     for _ in range(16):
-        if monitor.waitForAbort(0):
+        if monitor.abortRequested():
             return
         if xbmc.getCondVisibility("System.HasModalDialog(true)"):
             auth_appeared = True
