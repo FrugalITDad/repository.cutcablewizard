@@ -1,239 +1,100 @@
-import xbmc
-import xbmcgui
-import xbmcaddon
-import xbmcplugin
-import urllib.request
-import json
-import os
-import zipfile
+import xbmc, xbmcgui, xbmcaddon, xbmcvfs, os, shutil, urllib.request, json, ssl, zipfile
 
 ADDON = xbmcaddon.Addon()
-ADDON_ID = ADDON.getAddonInfo("id")
-ADDON_DATA = xbmc.translatePath(ADDON.getAddonInfo("profile"))
-
+ADDON_ID = ADDON.getAddonInfo('id')
+ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
 MANIFEST_URL = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
 
+# Whitelist to prevent deleting the wizard and repos during Fresh Start
+WHITELIST = [ADDON_ID, 'packages', 'temp', 'Database']
 
 def get_json(url):
-
     try:
-        with urllib.request.urlopen(url) as r:
-            return json.loads(r.read().decode())
-    except:
-        xbmcgui.Dialog().ok("CordCutter Wizard", "Failed to download build list.")
+        context = ssl._create_unverified_context()
+        req = urllib.request.Request(url, headers={'User-Agent': 'Kodi-Wizard'})
+        with urllib.request.urlopen(req, context=context, timeout=15) as r:
+            return json.loads(r.read().decode('utf-8'))
+    except Exception as e:
+        xbmc.log(f"Wizard Manifest Error: {str(e)}", xbmc.LOGERROR)
         return None
 
+def smart_fresh_start(silent=False):
+    if not silent:
+        if not xbmcgui.Dialog().yesno("Fresh Start", "Wipe current setup?\nWizard and repositories will be saved."): return False
+    
+    home = xbmcvfs.translatePath("special://home/")
+    for folder in ['addons', 'userdata']:
+        path = os.path.join(home, folder)
+        if not os.path.exists(path): continue
+        for item in os.listdir(path):
+            if item in WHITELIST or item.startswith('repository.'): continue
+            full_path = os.path.join(path, item)
+            try:
+                if os.path.isdir(full_path): shutil.rmtree(full_path, ignore_errors=True)
+                else: os.remove(full_path)
+            except: pass
+    
+    xbmc.executebuiltin('SaveSceneSettings')
+    if not silent:
+        xbmcgui.Dialog().ok("Fresh Start", "Cleanup Complete. Kodi will now close.")
+        xbmc.executebuiltin("Quit")
+    return True
 
-def is_android_tv():
-
-    if xbmc.getCondVisibility("System.Platform.Android"):
-        return True
-
-    return False
-
-
-def optimize_firetv():
-
-    xbmc.executeJSONRPC(json.dumps({
-     "jsonrpc":"2.0",
-     "method":"Settings.SetSettingValue",
-     "params":{"setting":"cache.buffer.mode","value":1},
-     "id":1
-    }))
-
-    xbmc.executeJSONRPC(json.dumps({
-     "jsonrpc":"2.0",
-     "method":"Settings.SetSettingValue",
-     "params":{"setting":"videoplayer.adjustrefreshrate","value":1},
-     "id":1
-    }))
-
-
-def download_build(url, name):
-
-    zip_path = os.path.join(ADDON_DATA, name + ".zip")
-
-    progress = xbmcgui.DialogProgress()
-    progress.create("CordCutter Wizard", "Downloading build...")
+def install_build(url, name, version):
+    if not os.path.exists(ADDON_DATA): os.makedirs(ADDON_DATA)
+    
+    # 1. Wipe old data first
+    smart_fresh_start(silent=True)
+    
+    zip_path = os.path.join(ADDON_DATA, "temp.zip")
+    home = xbmcvfs.translatePath("special://home/")
+    dp = xbmcgui.DialogProgress()
+    dp.create("CordCutter", f"Downloading {name}...")
 
     try:
-
-        with urllib.request.urlopen(url) as response, open(zip_path, "wb") as out:
-
-            total = int(response.headers.get("Content-Length", 0))
-            downloaded = 0
-            block = 8192
-
+        context = ssl._create_unverified_context()
+        with urllib.request.urlopen(url, context=context) as r, open(zip_path, 'wb') as f:
+            total = int(r.info().get('Content-Length', 0))
+            count = 0
             while True:
-
-                buffer = response.read(block)
-
-                if not buffer:
-                    break
-
-                downloaded += len(buffer)
-                out.write(buffer)
-
-                percent = int(downloaded * 100 / total)
-                progress.update(percent, "Downloading build...")
-
-        progress.close()
-        return zip_path
-
-    except:
-        progress.close()
-        xbmcgui.Dialog().ok("CordCutter Wizard", "Download failed.")
-        return None
-
-
-def extract_build(zip_path):
-
-    progress = xbmcgui.DialogProgress()
-    progress.create("CordCutter Wizard", "Installing build...")
-
-    home = xbmc.translatePath("special://home/")
-
-    with zipfile.ZipFile(zip_path, "r") as zip_ref:
-
-        total = len(zip_ref.infolist())
-        count = 0
-
-        for file in zip_ref.infolist():
-
-            zip_ref.extract(file, home)
-
-            count += 1
-            percent = int(count * 100 / total)
-
-            progress.update(percent, "Installing files...")
-
-    progress.close()
-
-
-def install_build(build):
-
-    if not is_android_tv():
-
-        xbmcgui.Dialog().ok(
-            "Unsupported Device",
-            "CordCutter builds are designed for Fire TV and Google TV devices."
-        )
-
-        return
-
-    confirm = xbmcgui.Dialog().yesno(
-        "Install Build",
-        f"{build['name']}\n\nVersion: {build['version']}\nSize: {build['size_mb']} MB\n\nInstall now?"
-    )
-
-    if not confirm:
-        return
-
-    zip_path = download_build(build["download_url"], build["id"])
-
-    if not zip_path:
-        return
-
-    extract_build(zip_path)
-
-    version_file = os.path.join(ADDON_DATA, "installed_version.txt")
-
-    with open(version_file, "w") as f:
-        f.write(build["version"])
-
-    optimize_firetv()
-
-    xbmcgui.Dialog().ok("CordCutter Wizard", "Build installed successfully.\nRestart Kodi.")
-
-
-def show_builds():
-
-    manifest = get_json(MANIFEST_URL)
-
-    if not manifest:
-        return
-
-    builds = manifest.get("builds", [])
-
-    options = []
-
-    for b in builds:
-
-        options.append(
-            f"{b['name']} ({b['size_mb']} MB)\n{b['description']}"
-        )
-
-    choice = xbmcgui.Dialog().select("Select Build", options)
-
-    if choice >= 0:
-
-        build = builds[choice]
-
-        xbmcgui.Dialog().textviewer(
-            build["name"],
-            f"Version: {build['version']}\n\nDescription:\n{build['description']}\n\nChangelog:\n{build['changelog']}"
-        )
-
-        install_build(build)
-
-
-def check_for_updates():
-
-    version_file = os.path.join(ADDON_DATA, "installed_version.txt")
-
-    if not os.path.exists(version_file):
-        xbmcgui.Dialog().ok("CordCutter Wizard", "No build currently installed.")
-        return
-
-    with open(version_file) as f:
-        current_version = f.read().strip()
-
-    manifest = get_json(MANIFEST_URL)
-
-    for build in manifest["builds"]:
-
-        if build["version"] != current_version:
-
-            if xbmcgui.Dialog().yesno(
-                "Update Available",
-                f"Installed: {current_version}\nLatest: {build['version']}\n\nInstall update?"
-            ):
-                install_build(build)
-
-            return
-
-    xbmcgui.Dialog().ok("CordCutter Wizard", "You are already on the latest build.")
-
-
-def fresh_start():
-
-    if xbmcgui.Dialog().yesno(
-        "Fresh Start",
-        "This will erase your Kodi configuration.\nContinue?"
-    ):
-
-        xbmc.executebuiltin("RunPlugin(plugin://plugin.program.indigo/?action=freshstart)")
-
+                chunk = r.read(262144) # Fast buffer
+                if not chunk: break
+                f.write(chunk)
+                count += len(chunk)
+                if total > 0: dp.update(int(count*100/total), "Downloading Build...")
+        
+        # 2. Extract
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            files = zf.infolist()
+            for i, file in enumerate(files):
+                if i % 200 == 0: dp.update(int(i*100/len(files)), "Extracting Content...")
+                zf.extract(file, home)
+        
+        # 3. Create triggers for service.py
+        with open(os.path.join(ADDON_DATA, 'firstrun.txt'), 'w') as f: f.write("pending")
+        with open(os.path.join(ADDON_DATA, 'installed_version.txt'), 'w') as f: f.write(version)
+        
+        dp.close()
+        xbmcgui.Dialog().ok("Success", "Build installed! Kodi will now close to finish setup.")
+        xbmc.executebuiltin("Quit")
+    except Exception as e:
+        dp.close()
+        xbmcgui.Dialog().ok("Error", f"Failed: {str(e)}")
 
 def main_menu():
-
-    options = [
-        "Install Build",
-        "Check for Updates",
-        "Fresh Start"
-    ]
-
+    manifest = get_json(MANIFEST_URL)
+    options = ["Install Build", "Check for Updates", "Fresh Start"]
     choice = xbmcgui.Dialog().select("CordCutter Wizard", options)
-
-    if choice == 0:
-        show_builds()
-
+    
+    if choice == 0 and manifest:
+        builds = manifest.get('builds', [])
+        names = [f"{b['name']} (v{b['version']})" for b in builds]
+        sel = xbmcgui.Dialog().select("Select Build", names)
+        if sel != -1: install_build(builds[sel]['download_url'], builds[sel]['name'], builds[sel]['version'])
     elif choice == 1:
-        check_for_updates()
-
+        # Check for updates logic
+        pass
     elif choice == 2:
-        fresh_start()
+        smart_fresh_start()
 
-
-if __name__ == "__main__":
-    main_menu()
+if __name__ == '__main__': main_menu()
