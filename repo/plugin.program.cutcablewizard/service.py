@@ -236,6 +236,30 @@ def run_first_time_setup(monitor):
         if monitor.waitForAbort(5):
             return
 
+    # ── Wait for any addon auth prompts to clear ──────────────────────────
+    # Some addons (e.g. JellyCon on the Pro build) show a login dialog
+    # immediately on boot. We hold setup back until all modal dialogs are
+    # gone so the first run questions never appear on top of an auth prompt.
+    # 10 minute ceiling handles slow logins; logs every 30s so it is visible
+    # in the Kodi log if something is unexpectedly blocking.
+    AUTH_WAIT_CEILING = 600  # 10 minutes
+    auth_wait_elapsed = 0
+    while xbmc.getCondVisibility("System.HasModalDialog(true)"):
+        if monitor.waitForAbort(2):
+            return
+        auth_wait_elapsed += 2
+        if auth_wait_elapsed % 30 == 0:
+            xbmc.log(
+                f"[CutCableWizard] First Run: waiting for modal dialog to clear "
+                f"({auth_wait_elapsed}s elapsed).", xbmc.LOGINFO
+            )
+        if auth_wait_elapsed >= AUTH_WAIT_CEILING:
+            xbmc.log(
+                "[CutCableWizard] First Run: modal dialog wait exceeded 10 minutes, "
+                "proceeding anyway.", xbmc.LOGWARNING
+            )
+            break
+
     xbmc.executebuiltin('ReplaceWindow(10000)')
     dialog = xbmcgui.Dialog()
 

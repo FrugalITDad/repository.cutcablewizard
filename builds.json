@@ -19,6 +19,16 @@
       "size_mb": 234,
       "changelog": "Plus release including 3rd party addons for expanded categories.",
       "admin_only": false
+    },
+    {
+      "id": "cordcutter_pro",
+      "name": "CordCutter Pro",
+      "description": "Plus Build with Jellyfin.",
+      "version": "1.1.0",
+      "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/1.1.0/cordcutter_pro-build-1.1.0.zip",
+      "size_mb": 241,
+      "changelog": "Pro release adding Jellyfin integration via JellyCon.",
+      "admin_only": false
     }
   ]
 }

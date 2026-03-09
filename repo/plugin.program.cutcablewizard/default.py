@@ -158,6 +158,7 @@ def smart_fresh_start(silent=False):
 BUILD_NAMES = {
     'cordcutter_base': 'CordCutter Base',
     'cordcutter_plus': 'CordCutter Plus',
+    'cordcutter_pro':  'CordCutter Pro',
 }
 
 def install_build(url, name, version, build_id):
