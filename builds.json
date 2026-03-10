@@ -29,6 +29,16 @@
       "size_mb": 241,
       "changelog": "Pro release adding Jellyfin integration via JellyCon.",
       "admin_only": false
+    },
+    {
+      "id": "cordcutter_pro_gaming",
+      "name": "CordCutter Pro w Gaming",
+      "description": "Pro Build with Gaming.",
+      "version": "1.1.0",
+      "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/1.1.0/cordcutter_pro_gaming-build-1.1.0.zip",
+      "size_mb": 354,
+      "changelog": "Pro Gaming release adding IAGL retro gaming integration via Archive.org.",
+      "admin_only": false
     }
   ]
 }

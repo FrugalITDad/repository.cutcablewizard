@@ -297,19 +297,19 @@ def run_first_time_setup(monitor):
     # ── Step 5: Trakt ────────────────────────────────────────────────────
     # Auth window has the full screen to itself with the countdown already done.
     if is_addon_installed("script.trakt"):
-        if dialog.yesno("Setup (5/6): Trakt", "Would you like to authorize your Trakt account?"):
+        if dialog.yesno("Setup (5/7): Trakt", "Would you like to authorize your Trakt account?"):
             xbmc.executebuiltin("Addon.OpenSettings(script.trakt)")
             wait_for_trakt_auth(monitor)  # Handles settings + auth window + confirm
     else:
         xbmc.log("[CutCableWizard] script.trakt not installed – skipping Trakt step.", xbmc.LOGINFO)
 
-    # ── Step 6: Scrubs V2 Trakt (Plus build only — skipped if not installed) ─
+    # ── Step 6: Scrubs V2 Trakt (Plus/Pro builds — skipped if not installed) ─
     # Scrubs V2 has its own separate Trakt authorization inside its Tools menu.
     # We open the Tools menu directly and wait for the user to back out before
     # continuing, so the completion message never appears while it is still open.
     if xbmc.getCondVisibility("System.HasAddon(plugin.video.scrubsv2)"):
         if dialog.yesno(
-            "Setup (6/6): Scrubs V2",
+            "Setup (6/7): Scrubs V2",
             "Would you like to authorize Trakt inside Scrubs V2?"
         ):
             dialog.ok(
@@ -327,6 +327,29 @@ def run_first_time_setup(monitor):
                     break
     else:
         xbmc.log("[CutCableWizard] plugin.video.scrubsv2 not installed – skipping Scrubs V2 step.", xbmc.LOGINFO)
+
+    # ── Step 7: IAGL Archive.org (Gaming build only — skipped if not installed) ─
+    # IAGL requires Archive.org credentials to be configured in its Downloading
+    # section before retro game content is accessible. We open the full addon
+    # settings, instruct the user to navigate to the Downloading section, then
+    # wait for them to close settings before showing the completion message.
+    if xbmc.getCondVisibility("System.HasAddon(plugin.program.iagl)"):
+        if dialog.yesno(
+            "Setup (7/7): IAGL Gaming",
+            "Would you like to configure Archive.org for the IAGL Gaming addon?\n\n"
+            "You will need your Archive.org account credentials."
+        ):
+            dialog.ok(
+                "IAGL - Archive.org Setup",
+                "The IAGL addon settings will now open.\n\n"
+                "Navigate to the [B]Downloading[/B] section on the left and "
+                "enter your Archive.org username and password, then close "
+                "settings to continue."
+            )
+            xbmc.executebuiltin("Addon.OpenSettings(plugin.program.iagl)")
+            wait_for_settings_dialog(monitor)
+    else:
+        xbmc.log("[CutCableWizard] plugin.program.iagl not installed – skipping IAGL step.", xbmc.LOGINFO)
 
     # ── Cleanup & finish ──────────────────────────────────────────────────
     try:
