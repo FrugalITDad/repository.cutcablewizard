@@ -51,6 +51,17 @@
       "admin_only": false
     },
     {
+      "id": "cordcutter_admin",
+      "name": "CordCutter Admin",
+      "description": "Personal admin build with pre-configured accounts.",
+      "version": "1.1.0",
+      "download_url": "https://cutcable-admin.wcouse3.workers.dev/admin-build",
+      "size_mb": 354,
+      "changelog": "Admin build — Trakt, Scrubs V2, JellyCon and IAGL pre-authorized.",
+      "admin_only": true,
+      "firstrun_steps": ["device_name", "iptv_sync", "buffer"]
+    },
+    {
       "id": "cordcutter_fresh_start",
       "name": "CordCutter Fresh Start",
       "description": "Clean slate restore with CutCableWizard, Unknown Sources enabled and Any Repositories set.",

@@ -11,6 +11,7 @@ MANIFEST_URL          = "https://raw.githubusercontent.com/FrugalITDad/repositor
 FIRSTRUN_FILE         = os.path.join(HOME, 'firstrun.txt')
 INSTALLED_FILE        = os.path.join(HOME, 'installed_version.txt')
 LAST_CHECK_FILE       = os.path.join(HOME, 'last_update_check.txt')
+FIRSTRUN_STEPS_FILE   = os.path.join(HOME, 'firstrun_steps.txt')
 
 
 # Seconds to wait after boot before starting First Run Setup.
@@ -162,12 +163,40 @@ def get_installed_info():
 # ---------------------------------------------------------------------------
 # First Run Setup
 # ---------------------------------------------------------------------------
+def read_firstrun_steps():
+    """
+    Reads firstrun_steps.txt and returns a set of allowed step names,
+    or None if the file does not exist (meaning run all steps).
+
+    The file is written by install_build() in default.py when a build
+    has a firstrun_steps list in builds.json (e.g. the admin build).
+    Regular builds do not write this file so all steps always run.
+
+    Step names must match the keys used in run_first_time_setup():
+      device_name, weather, subtitles, iptv_sync,
+      trakt, scrubs_v2, iagl, buffer
+    """
+    if not os.path.exists(FIRSTRUN_STEPS_FILE):
+        return None   # No filter — run all steps
+    try:
+        with open(FIRSTRUN_STEPS_FILE, 'r') as f:
+            steps = {s.strip() for s in f.read().strip().split(',') if s.strip()}
+        xbmc.log(f"[CutCableWizard] firstrun_steps filter: {steps}", xbmc.LOGINFO)
+        return steps if steps else None
+    except Exception:
+        return None   # Unreadable — safe fallback is to run all steps
+
+
 def run_first_time_setup(monitor):
     """
     Runs the interactive setup wizard.
     Called only when firstrun.txt exists (written by install_build).
     The trigger file is deleted ONLY after the full setup completes,
     so a crash mid-setup will re-trigger setup on the next Kodi boot.
+
+    If firstrun_steps.txt exists, only the listed steps are shown.
+    The step counter (X/Y) is computed from the active steps so the
+    numbering is always correct regardless of which steps are skipped.
     """
 
     # ── Wait for Aeon Nox Silvo to finish building menu shortcuts ─────────
@@ -211,99 +240,154 @@ def run_first_time_setup(monitor):
     xbmc.executebuiltin('ReplaceWindow(10000)')
     dialog = xbmcgui.Dialog()
 
-    # ── Step 1: Device Name ───────────────────────────────────────────────
-    name = dialog.input("Setup (1/5): Device Name", defaultt="Kodi-FireTV").strip()
-    if name:
-        set_kodi_setting("services.devicename", name)
+    # ── Determine which steps are active for this build ───────────────────
+    # ALL_STEPS defines the canonical order. read_firstrun_steps() returns
+    # a set of allowed step names from firstrun_steps.txt, or None (= all).
+    # The step counter "X/Y" is computed from the active list so it is always
+    # correct even when steps are skipped for the admin build.
+    ALL_STEPS = ['device_name', 'weather', 'subtitles', 'iptv_sync',
+                 'trakt', 'scrubs_v2', 'iagl', 'buffer']
 
-    # ── Step 2: Weather ───────────────────────────────────────────────────
-    if dialog.yesno("Setup (2/5): Weather", "Would you like to configure your weather location?"):
-        xbmc.executebuiltin("Addon.OpenSettings(weather.gismeteo)")
-        wait_for_settings_dialog(monitor)
+    allowed   = read_firstrun_steps()   # set of names or None
+    active    = [s for s in ALL_STEPS if allowed is None or s in allowed]
+    total     = len(active)
 
-    # ── Step 3: Subtitles ─────────────────────────────────────────────────
-    if dialog.yesno("Setup (3/5): Subtitles", "Enable automatic subtitles?"):
-        set_kodi_setting("subtitles.enabled", True)
+    def n(step_name):
+        """Returns the 1-based display index of step_name within active steps."""
+        return active.index(step_name) + 1 if step_name in active else 0
 
-    # ── Step 4: IPTV Guide Sync ───────────────────────────────────────────
-    # Runs before Trakt so the 145s countdown completes with no interruptions.
-    xbmc.executebuiltin("RunPlugin(plugin://plugin.program.iptv.merge/?mode=run)")
+    xbmc.log(f"[CutCableWizard] First Run active steps ({total}): {active}", xbmc.LOGINFO)
 
-    dp = xbmcgui.DialogProgress()
-    dp.create("CordCutter Setup", "Syncing Live TV Guide...")
+    # ── Step: Device Name ─────────────────────────────────────────────────
+    if 'device_name' in active:
+        name = dialog.input(
+            f"Setup ({n('device_name')}/{total}): Device Name",
+            defaultt="Kodi-FireTV"
+        ).strip()
+        if name:
+            set_kodi_setting("services.devicename", name)
 
-    total_time = 145
-    for i in range(total_time):
-        if monitor.waitForAbort(1) or dp.iscanceled():
-            break
-        percent   = int((i / float(total_time)) * 100)
-        remaining = total_time - i
-        dp.update(percent, f"Finalizing IPTV Guide setup...\nTime remaining: {remaining}s")
-
-    dp.close()
-
-    # ── Step 5: Trakt ────────────────────────────────────────────────────
-    # Auth window has the full screen to itself with the countdown already done.
-    if is_addon_installed("script.trakt"):
-        if dialog.yesno("Setup (5/7): Trakt", "Would you like to authorize your Trakt account?"):
-            xbmc.executebuiltin("Addon.OpenSettings(script.trakt)")
-            wait_for_trakt_auth(monitor)  # Handles settings + auth window + confirm
-    else:
-        xbmc.log("[CutCableWizard] script.trakt not installed – skipping Trakt step.", xbmc.LOGINFO)
-
-    # ── Step 6: Scrubs V2 Trakt (Plus/Pro builds — skipped if not installed) ─
-    # Scrubs V2 has its own separate Trakt authorization inside its Tools menu.
-    # We open the Tools menu directly and wait for the user to back out before
-    # continuing, so the completion message never appears while it is still open.
-    if xbmc.getCondVisibility("System.HasAddon(plugin.video.scrubsv2)"):
+    # ── Step: Weather ─────────────────────────────────────────────────────
+    if 'weather' in active:
         if dialog.yesno(
-            "Setup (6/7): Scrubs V2",
-            "Would you like to authorize Trakt inside Scrubs V2?"
+            f"Setup ({n('weather')}/{total}): Weather",
+            "Would you like to configure your weather location?"
         ):
-            dialog.ok(
-                "Scrubs V2 - Trakt Authorization",
-                "The Scrubs V2 Tools menu will now open.\n\n"
-                "Select [B]Trakt: Authorize[/B] from the list, complete the "
-                "authorization, then press Back to continue setup."
-            )
-            xbmc.executebuiltin(
-                'ActivateWindow(Videos,"plugin://plugin.video.scrubsv2/?action=tools_menu",return)'
-            )
-            # Wait for the user to back out of the Scrubs V2 tools window
-            while xbmc.getCondVisibility("Window.IsActive(videos)"):
-                if monitor.waitForAbort(1):
-                    break
-    else:
-        xbmc.log("[CutCableWizard] plugin.video.scrubsv2 not installed – skipping Scrubs V2 step.", xbmc.LOGINFO)
-
-    # ── Step 7: IAGL Archive.org (Gaming build only — skipped if not installed) ─
-    # IAGL requires Archive.org credentials to be configured in its Downloading
-    # section before retro game content is accessible. We open the full addon
-    # settings, instruct the user to navigate to the Downloading section, then
-    # wait for them to close settings before showing the completion message.
-    if xbmc.getCondVisibility("System.HasAddon(plugin.program.iagl)"):
-        if dialog.yesno(
-            "Setup (7/7): IAGL Gaming",
-            "Would you like to configure Archive.org for the IAGL Gaming addon?\n\n"
-            "You will need your Archive.org account credentials."
-        ):
-            dialog.ok(
-                "IAGL - Archive.org Setup",
-                "The IAGL addon settings will now open.\n\n"
-                "Navigate to the [B]Downloading[/B] section on the left and "
-                "enter your Archive.org username and password, then close "
-                "settings to continue."
-            )
-            xbmc.executebuiltin("Addon.OpenSettings(plugin.program.iagl)")
+            xbmc.executebuiltin("Addon.OpenSettings(weather.gismeteo)")
             wait_for_settings_dialog(monitor)
-    else:
-        xbmc.log("[CutCableWizard] plugin.program.iagl not installed – skipping IAGL step.", xbmc.LOGINFO)
+
+    # ── Step: Subtitles ───────────────────────────────────────────────────
+    if 'subtitles' in active:
+        if dialog.yesno(
+            f"Setup ({n('subtitles')}/{total}): Subtitles",
+            "Enable automatic subtitles?"
+        ):
+            set_kodi_setting("subtitles.enabled", True)
+
+    # ── Step: IPTV Guide Sync ─────────────────────────────────────────────
+    # Runs before Trakt so the 145s countdown completes with no interruptions.
+    if 'iptv_sync' in active:
+        xbmc.executebuiltin("RunPlugin(plugin://plugin.program.iptv.merge/?mode=run)")
+        dp = xbmcgui.DialogProgress()
+        dp.create(
+            f"Setup ({n('iptv_sync')}/{total}): IPTV Guide Sync",
+            "Syncing Live TV Guide..."
+        )
+        total_time = 145
+        for i in range(total_time):
+            if monitor.waitForAbort(1) or dp.iscanceled():
+                break
+            percent   = int((i / float(total_time)) * 100)
+            remaining = total_time - i
+            dp.update(percent, f"Finalizing IPTV Guide setup...\nTime remaining: {remaining}s")
+        dp.close()
+
+    # ── Step: Trakt ───────────────────────────────────────────────────────
+    if 'trakt' in active:
+        if is_addon_installed("script.trakt"):
+            if dialog.yesno(
+                f"Setup ({n('trakt')}/{total}): Trakt",
+                "Would you like to authorize your Trakt account?"
+            ):
+                xbmc.executebuiltin("Addon.OpenSettings(script.trakt)")
+                wait_for_trakt_auth(monitor)
+        else:
+            xbmc.log("[CutCableWizard] script.trakt not installed – skipping Trakt step.", xbmc.LOGINFO)
+
+    # ── Step: Scrubs V2 Trakt ─────────────────────────────────────────────
+    if 'scrubs_v2' in active:
+        if xbmc.getCondVisibility("System.HasAddon(plugin.video.scrubsv2)"):
+            if dialog.yesno(
+                f"Setup ({n('scrubs_v2')}/{total}): Scrubs V2",
+                "Would you like to authorize Trakt inside Scrubs V2?"
+            ):
+                dialog.ok(
+                    "Scrubs V2 - Trakt Authorization",
+                    "The Scrubs V2 Tools menu will now open.\n\n"
+                    "Select [B]Trakt: Authorize[/B] from the list, complete the "
+                    "authorization, then press Back to continue setup."
+                )
+                xbmc.executebuiltin(
+                    'ActivateWindow(Videos,"plugin://plugin.video.scrubsv2/?action=tools_menu",return)'
+                )
+                while xbmc.getCondVisibility("Window.IsActive(videos)"):
+                    if monitor.waitForAbort(1):
+                        break
+        else:
+            xbmc.log("[CutCableWizard] plugin.video.scrubsv2 not installed – skipping Scrubs V2 step.", xbmc.LOGINFO)
+
+    # ── Step: IAGL Archive.org ────────────────────────────────────────────
+    if 'iagl' in active:
+        if xbmc.getCondVisibility("System.HasAddon(plugin.program.iagl)"):
+            if dialog.yesno(
+                f"Setup ({n('iagl')}/{total}): IAGL Gaming",
+                "Would you like to configure Archive.org for the IAGL Gaming addon?\n\n"
+                "You will need your Archive.org account credentials."
+            ):
+                dialog.ok(
+                    "IAGL - Archive.org Setup",
+                    "The IAGL addon settings will now open.\n\n"
+                    "Navigate to the [B]Downloading[/B] section on the left and "
+                    "enter your Archive.org username and password, then close "
+                    "settings to continue."
+                )
+                xbmc.executebuiltin("Addon.OpenSettings(plugin.program.iagl)")
+                wait_for_settings_dialog(monitor)
+        else:
+            xbmc.log("[CutCableWizard] plugin.program.iagl not installed – skipping IAGL step.", xbmc.LOGINFO)
+
+    # ── Step: EZ Maintenance+ Buffer Optimization ─────────────────────────
+    if 'buffer' in active:
+        if xbmc.getCondVisibility("System.HasAddon(script.ezmaintenanceplus)"):
+            if dialog.yesno(
+                f"Setup ({n('buffer')}/{total}): Buffer Optimization",
+                "Would you like to optimize the buffer size for this device?\n\n"
+                "This is recommended for the best streaming performance."
+            ):
+                dialog.ok(
+                    "Buffer Optimization",
+                    "The EZ Maintenance+ menu will now open.\n\n"
+                    "Select [B]ADVANCED SETTINGS (BUFFER SIZE)[/B] from the menu, "
+                    "then choose [B]USE OPTIMAL[/B] to apply the best buffer "
+                    "settings for this device.\n\n"
+                    "Close the menu when done to complete setup."
+                )
+                xbmc.executebuiltin("RunAddon(script.ezmaintenanceplus)")
+                xbmc.sleep(2000)
+                while (xbmc.getCondVisibility("Window.IsActive(programs)") or
+                       xbmc.getCondVisibility("System.HasModalDialog(true)")):
+                    if monitor.waitForAbort(1):
+                        break
+        else:
+            xbmc.log("[CutCableWizard] script.ezmaintenanceplus not installed – skipping buffer step.", xbmc.LOGINFO)
 
     # ── Cleanup & finish ──────────────────────────────────────────────────
-    try:
-        os.remove(FIRSTRUN_FILE)   # Only removed here – after full completion
-    except Exception:
-        pass
+    for f in [FIRSTRUN_FILE, FIRSTRUN_STEPS_FILE]:
+        try:
+            if os.path.exists(f):
+                os.remove(f)
+        except Exception:
+            pass
 
     xbmc.executebuiltin('SaveSceneSettings')
     dialog.ok(
