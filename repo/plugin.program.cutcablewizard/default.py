@@ -211,10 +211,11 @@ def smart_fresh_start(manifest):
 
 # Human-readable names for build IDs used in the switch-build warning.
 BUILD_NAMES = {
-    'cordcutter_base':        'CordCutter Base',
-    'cordcutter_plus':        'CordCutter Plus',
-    'cordcutter_pro':         'CordCutter Pro',
-    'cordcutter_pro_gaming':  'CordCutter Pro w Gaming',
+    'cordcutter_base':         'CordCutter Base',
+    'cordcutter_plus':         'CordCutter Plus',
+    'cordcutter_plus_gaming':  'CordCutter Plus w Gaming',
+    'cordcutter_pro':          'CordCutter Pro',
+    'cordcutter_pro_gaming':   'CordCutter Pro w Gaming',
 }
 
 def install_build(url, name, version, build_id):
