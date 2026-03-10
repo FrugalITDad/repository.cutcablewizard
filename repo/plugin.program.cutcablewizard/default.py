@@ -9,9 +9,6 @@ HOME     = xbmcvfs.translatePath("special://home/")
 
 MANIFEST_URL = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
 
-# Addons preserved during fresh start (folder names inside /addons)
-PROTECTED_ADDONS = {'plugin.program.cutcablewizard', 'repository.cutcablewizard'}
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -58,63 +55,18 @@ def get_installed_info():
 # ---------------------------------------------------------------------------
 # Fresh Start
 # ---------------------------------------------------------------------------
-def smart_fresh_start(silent=False):
+
+FRESH_START_BUILD_ID  = 'cordcutter_fresh_start'
+
+def wipe_kodi():
     """
-    Wipes Kodi completely, preserving only:
-      - addons/plugin.program.cutcablewizard
-      - addons/repository.cutcablewizard
-      - userdata/addon_data/plugin.program.cutcablewizard  (wizard prefs)
-    Also deletes packages/, temp/, and Database/ in full.
-    After the wipe applies two Kodi settings:
-      - Unknown Sources  → ON
-      - Addon updates    → Any Repositories
+    Core wipe routine shared by both smart_fresh_start() and install_build().
+    Deletes all Kodi folders and HOME root trigger files completely.
+    Nothing is preserved — the caller is responsible for extracting a zip
+    immediately after so Kodi always boots into a known good state.
     """
-    if not silent:
-        if not xbmcgui.Dialog().yesno(
-            "Fresh Start",
-            "This will completely wipe your Kodi installation.\n"
-            "Only the CutCableWizard addon and repository will be preserved.\n\n"
-            "Are you absolutely sure?"
-        ):
-            return False
-
-    # ── addons folder ──────────────────────────────────────────────────────
-    addons_path = os.path.join(HOME, 'addons')
-    if os.path.exists(addons_path):
-        for item in os.listdir(addons_path):
-            if item in PROTECTED_ADDONS:
-                continue
-            full = os.path.join(addons_path, item)
-            try:
-                shutil.rmtree(full, ignore_errors=True) if os.path.isdir(full) else os.remove(full)
-            except Exception:
-                pass
-
-    # ── userdata folder ────────────────────────────────────────────────────
-    userdata_path = os.path.join(HOME, 'userdata')
-    if os.path.exists(userdata_path):
-        for item in os.listdir(userdata_path):
-            full = os.path.join(userdata_path, item)
-
-            if item == 'addon_data' and os.path.isdir(full):
-                # Inside addon_data keep only the wizard's own settings
-                for addon_folder in os.listdir(full):
-                    if addon_folder == 'plugin.program.cutcablewizard':
-                        continue
-                    sub = os.path.join(full, addon_folder)
-                    try:
-                        shutil.rmtree(sub, ignore_errors=True) if os.path.isdir(sub) else os.remove(sub)
-                    except Exception:
-                        pass
-                continue  # done with addon_data, move to next item
-
-            try:
-                shutil.rmtree(full, ignore_errors=True) if os.path.isdir(full) else os.remove(full)
-            except Exception:
-                pass
-
-    # ── Full wipe: packages, temp, Database ───────────────────────────────
-    for folder in ['packages', 'temp', 'Database']:
+    # ── addons ────────────────────────────────────────────────────────────
+    for folder in ['addons', 'userdata', 'packages', 'temp', 'Database']:
         path = os.path.join(HOME, folder)
         if os.path.exists(path):
             try:
@@ -122,11 +74,9 @@ def smart_fresh_start(silent=False):
             except Exception:
                 pass
 
-    # ── Clean up HOME root trigger files so they don't fire after the wipe ─
-    # firstrun.txt must be deleted here — if a build was previously installed
-    # it would survive the folder wipes and wrongly trigger First Run setup
-    # on the next boot.
-    for trigger in ['firstrun.txt', 'installed_version.txt', 'last_update_check.txt']:
+    # ── HOME root trigger files ───────────────────────────────────────────
+    for trigger in ['firstrun.txt', 'installed_version.txt',
+                    'last_update_check.txt', 'post_fresh_start.txt']:
         path = os.path.join(HOME, trigger)
         try:
             if os.path.exists(path):
@@ -134,20 +84,125 @@ def smart_fresh_start(silent=False):
         except Exception:
             pass
 
-    # ── Write post-fresh-start trigger (manual fresh start only) ─────────
-    # Only written when the user explicitly chose Fresh Start from the menu.
-    # During a silent build-install wipe (silent=True) we do NOT write this
-    # because the build zip brings its own guisettings.xml, and firstrun.txt
-    # handles first-run setup. Writing post_fresh_start.txt during a build
-    # install causes service.py to skip firstrun.txt on the next boot.
-    if not silent:
-        try:
-            with open(os.path.join(HOME, 'post_fresh_start.txt'), 'w') as f:
-                f.write("pending")
-        except Exception:
-            pass
 
-    return True
+def smart_fresh_start(manifest):
+    """
+    Full fresh start flow:
+      1. Confirm with the user
+      2. Fetch the clean slate build URL from the manifest
+      3. Download and verify the zip (user's existing setup untouched until here)
+      4. Wipe everything
+      5. Extract clean slate zip (bakes in Unknown Sources ON + Any Repositories
+         + wizard + repo — no post-boot JSON-RPC calls needed)
+      6. Force close so Kodi boots into the clean slate
+
+    The clean slate zip replaces the old post_fresh_start.txt trigger approach.
+    Settings are guaranteed to be correct because they are baked into the zip's
+    guisettings.xml rather than applied via JSON-RPC after the fact.
+    """
+    if not xbmcgui.Dialog().yesno(
+        "Fresh Start",
+        "This will completely wipe your Kodi installation and restore a "
+        "clean base with only the CutCableWizard installed.\n\n"
+        "Are you absolutely sure?"
+    ):
+        return False
+
+    if not manifest:
+        xbmcgui.Dialog().ok(
+            "Fresh Start Error",
+            "Could not reach the build server to download the clean slate.\n\n"
+            "Please check your internet connection and try again."
+        )
+        return False
+
+    # ── Find the clean slate build in the manifest ────────────────────────
+    builds = manifest.get('builds', [])
+    fresh_build = next((b for b in builds if b['id'] == FRESH_START_BUILD_ID), None)
+    if not fresh_build:
+        xbmcgui.Dialog().ok(
+            "Fresh Start Error",
+            "The clean slate build was not found in the manifest.\n\n"
+            "Please update the CutCableWizard to the latest version."
+        )
+        return False
+
+    zip_path = os.path.join(HOME, "freshstart.zip")
+    dp = xbmcgui.DialogProgress()
+    dp.create("Fresh Start", "Downloading clean slate...")
+
+    try:
+        # ── 1. Download ───────────────────────────────────────────────────
+        context = ssl._create_unverified_context()
+        url = fresh_build['download_url']
+        with urllib.request.urlopen(url, context=context) as r, open(zip_path, 'wb') as f:
+            total = int(r.info().get('Content-Length', 0))
+            count = 0
+            while True:
+                chunk = r.read(262144)
+                if not chunk:
+                    break
+                f.write(chunk)
+                count += len(chunk)
+                if total > 0:
+                    dp.update(int(count * 100 / total), "Downloading clean slate...")
+                if dp.iscanceled():
+                    dp.close()
+                    if os.path.exists(zip_path):
+                        os.remove(zip_path)
+                    return False
+
+        # ── 2. Verify ─────────────────────────────────────────────────────
+        dp.update(0, "Verifying download...")
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                bad_file = zf.testzip()
+            if bad_file:
+                raise zipfile.BadZipFile(f"Corrupt file in zip: {bad_file}")
+        except zipfile.BadZipFile as e:
+            dp.close()
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+            xbmcgui.Dialog().ok(
+                "Fresh Start Error",
+                f"The clean slate download appears to be corrupt.\n\n{str(e)}\n\n"
+                "Your existing setup has not been touched. Please try again."
+            )
+            return False
+
+        # ── 3. Wipe ───────────────────────────────────────────────────────
+        dp.update(0, "Wiping Kodi...")
+        wipe_kodi()
+
+        # ── 4. Extract clean slate ────────────────────────────────────────
+        dp.update(0, "Restoring clean slate...")
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            files = zf.infolist()
+            total_files = len(files)
+            for i, zipped_file in enumerate(files):
+                if i % 100 == 0:
+                    dp.update(
+                        int(i * 100 / total_files),
+                        f"Restoring: {zipped_file.filename[:35]}"
+                    )
+                zf.extract(zipped_file, HOME)
+
+        dp.close()
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+
+        return True
+
+    except Exception as e:
+        dp.close()
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+        xbmcgui.Dialog().ok(
+            "Fresh Start Error",
+            f"Fresh Start failed:\n\n{str(e)}\n\n"
+            "Your existing setup has not been modified."
+        )
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +287,7 @@ def install_build(url, name, version, build_id):
         # ── 3. Wipe ───────────────────────────────────────────────────────
         # Only reached if download and verification both succeeded.
         dp.update(0, "Preparing for installation...")
-        smart_fresh_start(silent=True)
+        wipe_kodi()
 
         # ── 4. Extract ────────────────────────────────────────────────────
         dp.update(0, "Extracting build files...")
@@ -356,10 +411,11 @@ def main_menu():
             )
 
     elif choice == 1:
-        if smart_fresh_start():
+        if smart_fresh_start(manifest):
             xbmcgui.Dialog().ok(
                 "Fresh Start Complete",
-                "Kodi has been wiped and Unknown Sources have been enabled.\n\n"
+                "Kodi has been wiped and restored to a clean slate.\n\n"
+                "Unknown Sources are enabled and the CutCableWizard is ready.\n\n"
                 "Kodi will now close. Reopen it when you are ready to install a build."
             )
             os._exit(1)

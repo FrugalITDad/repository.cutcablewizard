@@ -11,10 +11,7 @@ MANIFEST_URL          = "https://raw.githubusercontent.com/FrugalITDad/repositor
 FIRSTRUN_FILE         = os.path.join(HOME, 'firstrun.txt')
 INSTALLED_FILE        = os.path.join(HOME, 'installed_version.txt')
 LAST_CHECK_FILE       = os.path.join(HOME, 'last_update_check.txt')
-POST_FRESH_START_FILE = os.path.join(HOME, 'post_fresh_start.txt')
 
-# Addons that must be re-enabled after a fresh start wipes the addon database
-PROTECTED_ADDONS = ['plugin.program.cutcablewizard', 'repository.cutcablewizard']
 
 # Seconds to wait after boot before starting First Run Setup.
 # Gives Aeon Nox Silvo time to finish building its menu shortcuts.
@@ -160,55 +157,6 @@ def get_installed_info():
     except Exception:
         pass
     return None, None
-
-
-# ---------------------------------------------------------------------------
-# Post Fresh Start  (runs on first boot after a fresh start wipe)
-# ---------------------------------------------------------------------------
-def enable_addon(addon_id):
-    """Force-enable an addon via JSON-RPC."""
-    xbmc.executeJSONRPC(json.dumps({
-        "jsonrpc": "2.0",
-        "method": "Addons.SetAddonEnabled",
-        "params": {"addonid": addon_id, "enabled": True},
-        "id": 1
-    }))
-
-
-def run_post_fresh_start(monitor):
-    """
-    Called on the first Kodi boot after a fresh start wipe.
-    At this point Kodi has rebuilt a clean addon database, so:
-      1. Re-enable the wizard and its repository (wiped DB marked them disabled)
-      2. Apply Unknown Sources ON
-      3. Apply addon updates from Any Repositories
-    Settings are applied HERE (not during the wipe) because guisettings.xml
-    is freshly created by Kodi on this boot and JSON-RPC writes will persist.
-    """
-    xbmc.log("[CutCableWizard] Post Fresh Start: applying settings.", xbmc.LOGINFO)
-
-    # Wait for Kodi to fully initialise before touching the addon DB
-    if monitor.waitForAbort(15):
-        return
-
-    # ── Re-enable protected addons ────────────────────────────────────────
-    for addon_id in PROTECTED_ADDONS:
-        enable_addon(addon_id)
-        xbmc.log(f"[CutCableWizard] Re-enabled: {addon_id}", xbmc.LOGINFO)
-
-    # ── Apply system settings ─────────────────────────────────────────────
-    # Unknown Sources ON
-    set_kodi_setting('addons.unknownsources', True)
-    # Addon updates from Any Repositories (0=off, 1=official only, 2=any)
-    set_kodi_setting('general.addonupdates', 2)
-
-    # ── Remove trigger ────────────────────────────────────────────────────
-    try:
-        os.remove(POST_FRESH_START_FILE)
-    except Exception:
-        pass
-
-    xbmc.log("[CutCableWizard] Post Fresh Start complete.", xbmc.LOGINFO)
 
 
 # ---------------------------------------------------------------------------
@@ -441,23 +389,12 @@ def run_service():
     monitor = xbmc.Monitor()
     xbmc.log("[CutCableWizard] Service started.", xbmc.LOGINFO)
 
-    # ── Post Fresh Start ──────────────────────────────────────────────────
-    # Runs on first boot after a manual fresh start wipe. Re-enables the
-    # wizard/repo and applies Unknown Sources + Any Repositories settings.
-    # Uses its own if (not elif) so that if firstrun.txt also exists somehow
-    # it is still caught in the next block.
-    if os.path.exists(POST_FRESH_START_FILE):
-        run_post_fresh_start(monitor)
-
-    # ── First Run setup (only when a build was just installed) ────────────
-    # Separate if (not elif) so it always runs when firstrun.txt is present,
-    # regardless of whether post_fresh_start also ran above.
+    # ── First Run setup (only when a build was just installed) ──────────
     if os.path.exists(FIRSTRUN_FILE):
         run_first_time_setup(monitor)
 
-    # ── Daily update check ────────────────────────────────────────────────
-    # Only runs when neither setup trigger is present.
-    elif not os.path.exists(POST_FRESH_START_FILE) and should_check_for_updates():
+    # ── Daily update check (skipped when first run setup is pending) ─────
+    elif should_check_for_updates():
         # Give Kodi a moment to fully load before showing any dialog
         if not monitor.waitForAbort(15):
             run_update_check()

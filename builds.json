@@ -39,6 +39,16 @@
       "size_mb": 354,
       "changelog": "Pro Gaming release adding IAGL retro gaming integration via Archive.org.",
       "admin_only": false
+    },
+    {
+      "id": "cordcutter_fresh_start",
+      "name": "CordCutter Fresh Start",
+      "description": "Clean slate restore with CutCableWizard, Unknown Sources enabled and Any Repositories set.",
+      "version": "1.1.0",
+      "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/1.1.0/cordcutter_freshstart-build-1.1.0.zip",
+      "size_mb": 3,
+      "changelog": "Internal clean slate build used by the Fresh Start function.",
+      "admin_only": true
     }
   ]
 }
