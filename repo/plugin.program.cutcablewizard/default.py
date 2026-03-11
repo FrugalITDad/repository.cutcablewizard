@@ -101,28 +101,40 @@ def unlock_admin_mode():
     try:
         context = ssl._create_unverified_context()
         import urllib.parse
-        # URL-encode the password so special characters like # and ! are
-        # preserved correctly when passed as a query parameter.
+        # URL-encode the password so special characters are preserved.
         params   = urllib.parse.urlencode({'password': password}, quote_via=urllib.parse.quote)
         auth_url = f"{CLOUDFLARE_WORKER_URL}/auth?{params}"
-        req = urllib.request.Request(
-            auth_url,
-            headers={'User-Agent': 'Kodi-Wizard'},
-            method='GET'
-        )
         xbmc.log(f"[CutCableWizard] Admin auth: password chars: {[ord(c) for c in password]}", xbmc.LOGINFO)
-        xbmc.log(f"[CutCableWizard] Admin auth: connecting to {CLOUDFLARE_WORKER_URL}/auth", xbmc.LOGINFO)
+        xbmc.log(f"[CutCableWizard] Admin auth: connecting to {auth_url}", xbmc.LOGINFO)
+
+        # Use xbmcvfs to make the HTTP request — more reliable than urllib
+        # on Android/FireTV where urllib can throw error 1042.
         raw    = None
         result = {'valid': False}
         try:
-            r   = urllib.request.urlopen(req, context=context, timeout=15)
-            raw = r.read().decode('utf-8')
-        except urllib.error.HTTPError as e:
-            # 403 wrong password — read body safely
+            f   = xbmcvfs.File(auth_url)
+            raw = f.read().decode('utf-8') if isinstance(f.read(), bytes) else f.read()
+            f.close()
+        except Exception as read_err:
+            xbmc.log(f"[CutCableWizard] Admin auth xbmcvfs error: {read_err}", xbmc.LOGWARNING)
+            # Fall back to urllib if xbmcvfs fails
             try:
-                raw = e.read().decode('utf-8')
-            except Exception:
-                raw = ''
+                req = urllib.request.Request(
+                    auth_url,
+                    headers={'User-Agent': 'Kodi-Wizard'},
+                    method='GET'
+                )
+                try:
+                    r   = urllib.request.urlopen(req, context=context, timeout=15)
+                    raw = r.read().decode('utf-8')
+                except urllib.error.HTTPError as e:
+                    try:
+                        raw = e.read().decode('utf-8')
+                    except Exception:
+                        raw = ''
+            except Exception as url_err:
+                xbmc.log(f"[CutCableWizard] Admin auth urllib error: {url_err}", xbmc.LOGWARNING)
+
         xbmc.log(f"[CutCableWizard] Admin auth raw response: [{raw}]", xbmc.LOGINFO)
         if raw:
             try:
