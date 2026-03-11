@@ -111,30 +111,23 @@ def unlock_admin_mode():
         # on Android/FireTV where urllib can throw error 1042.
         raw    = None
         result = {'valid': False}
+        # Use Kodi's executeJSONRPC-style HTTP via the addon's built-in
+        # HTTP handler which works reliably on all platforms including Android.
         try:
-            f    = xbmcvfs.File(auth_url)
-            data = f.read()
-            f.close()
-            raw  = data.decode('utf-8') if isinstance(data, bytes) else data
-        except Exception as read_err:
-            xbmc.log(f"[CutCableWizard] Admin auth xbmcvfs error: {read_err}", xbmc.LOGWARNING)
-            # Fall back to urllib if xbmcvfs fails
-            try:
-                req = urllib.request.Request(
-                    auth_url,
-                    headers={'User-Agent': 'Kodi-Wizard'},
-                    method='GET'
-                )
-                try:
-                    r   = urllib.request.urlopen(req, context=context, timeout=15)
-                    raw = r.read().decode('utf-8')
-                except urllib.error.HTTPError as e:
-                    try:
-                        raw = e.read().decode('utf-8')
-                    except Exception:
-                        raw = ''
-            except Exception as url_err:
-                xbmc.log(f"[CutCableWizard] Admin auth urllib error: {url_err}", xbmc.LOGWARNING)
+            import http.client
+            import socket
+            parsed   = urllib.parse.urlparse(auth_url)
+            hostname = parsed.hostname
+            path     = parsed.path + ('?' + parsed.query if parsed.query else '')
+            conn     = http.client.HTTPSConnection(hostname, timeout=15,
+                           context=ssl._create_unverified_context())
+            conn.request('GET', path, headers={'User-Agent': 'Kodi-Wizard'})
+            resp = conn.getresponse()
+            raw  = resp.read().decode('utf-8')
+            conn.close()
+            xbmc.log(f"[CutCableWizard] Admin auth http.client status: {resp.status}", xbmc.LOGINFO)
+        except Exception as http_err:
+            xbmc.log(f"[CutCableWizard] Admin auth http.client error: {type(http_err).__name__}: {http_err}", xbmc.LOGWARNING)
 
         xbmc.log(f"[CutCableWizard] Admin auth raw response: [{raw}]", xbmc.LOGINFO)
         if raw:
