@@ -100,16 +100,15 @@ def unlock_admin_mode():
 
     try:
         context = ssl._create_unverified_context()
-        payload = json.dumps({'password': password}).encode('utf-8')
+        import urllib.parse
+        # URL-encode the password so special characters like # and ! are
+        # preserved correctly when passed as a query parameter.
+        params   = urllib.parse.urlencode({'password': password}, quote_via=urllib.parse.quote)
+        auth_url = f"{CLOUDFLARE_WORKER_URL}/auth?{params}"
         req = urllib.request.Request(
-            f"{CLOUDFLARE_WORKER_URL}/auth",
-            data=payload,
-            headers={
-                'Content-Type':   'application/json',
-                'Content-Length': str(len(payload)),
-                'User-Agent':     'Kodi-Wizard'
-            },
-            method='POST'
+            auth_url,
+            headers={'User-Agent': 'Kodi-Wizard'},
+            method='GET'
         )
         xbmc.log(f"[CutCableWizard] Admin auth: connecting to {CLOUDFLARE_WORKER_URL}/auth", xbmc.LOGINFO)
         try:
@@ -118,10 +117,9 @@ def unlock_admin_mode():
             xbmc.log(f"[CutCableWizard] Admin auth response: {raw}", xbmc.LOGINFO)
             result = json.loads(raw)
         except urllib.error.HTTPError as e:
-            # 403 with {"valid":false} is a normal wrong-password response
             raw = e.read().decode('utf-8')
             xbmc.log(f"[CutCableWizard] Admin auth HTTP {e.code}: {raw}", xbmc.LOGINFO)
-            result = json.loads(raw)
+            result = json.loads(raw) if raw else {'valid': False}
         if result.get('valid'):
             _admin_mode           = True
             _admin_password_cache = password
