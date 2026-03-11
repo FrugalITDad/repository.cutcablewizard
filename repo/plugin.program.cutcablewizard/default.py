@@ -125,6 +125,13 @@ def unlock_admin_mode():
             with urllib.request.urlopen(req, context=context_, timeout=15) as r:
                 raw = r.read().decode('utf-8')
             xbmc.log(f"[CutCableWizard] Admin auth urllib status: 200", xbmc.LOGINFO)
+        except urllib.error.HTTPError as e:
+            body = ''
+            try:
+                body = e.read().decode('utf-8')
+            except Exception:
+                pass
+            xbmc.log(f"[CutCableWizard] Admin auth HTTPError {e.code}: url=[{e.url}] body=[{body}]", xbmc.LOGWARNING)
         except Exception as e:
             xbmc.log(f"[CutCableWizard] Admin auth urllib error: {type(e).__name__}: {e}", xbmc.LOGWARNING)
 
