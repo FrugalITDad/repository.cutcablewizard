@@ -103,7 +103,7 @@ def unlock_admin_mode():
         import urllib.parse
         # URL-encode the password so special characters are preserved.
         params   = urllib.parse.urlencode({'password': password}, quote_via=urllib.parse.quote)
-        auth_url = f"{CLOUDFLARE_WORKER_URL}/auth?{params}"
+        auth_url = f"{CLOUDFLARE_WORKER_URL}/?{params}"
         xbmc.log(f"[CutCableWizard] Admin auth: password chars: {[ord(c) for c in password]}", xbmc.LOGINFO)
         xbmc.log(f"[CutCableWizard] Admin auth: connecting to {auth_url}", xbmc.LOGINFO)
         # Quick test — also try the manifest URL to confirm urllib works at all
