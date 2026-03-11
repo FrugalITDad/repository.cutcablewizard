@@ -104,7 +104,11 @@ def unlock_admin_mode():
         req = urllib.request.Request(
             f"{CLOUDFLARE_WORKER_URL}/auth",
             data=payload,
-            headers={'Content-Type': 'application/json', 'User-Agent': 'Kodi-Wizard'},
+            headers={
+                'Content-Type':   'application/json',
+                'Content-Length': str(len(payload)),
+                'User-Agent':     'Kodi-Wizard'
+            },
             method='POST'
         )
         xbmc.log(f"[CutCableWizard] Admin auth: connecting to {CLOUDFLARE_WORKER_URL}/auth", xbmc.LOGINFO)
