@@ -107,26 +107,36 @@ def unlock_admin_mode():
             headers={'Content-Type': 'application/json', 'User-Agent': 'Kodi-Wizard'},
             method='POST'
         )
-        with urllib.request.urlopen(req, context=context, timeout=15) as r:
-            result = json.loads(r.read().decode('utf-8'))
-            if result.get('valid'):
-                _admin_mode           = True
-                _admin_password_cache = password   # held for Bearer header on admin download
-                xbmc.log("[CutCableWizard] Admin mode unlocked.", xbmc.LOGINFO)
-                xbmcgui.Dialog().ok(
-                    "Admin Mode Unlocked",
-                    "Admin mode is now active.\n\n"
-                    "[B]Developer mode:[/B] First Run Setup will be suppressed "
-                    "after the next install — Kodi will boot normally.\n\n"
-                    "[B]Admin build:[/B] Now visible in the Install Build menu.\n\n"
-                    "Both features clear automatically after one install."
-                )
-                return True
+        xbmc.log(f"[CutCableWizard] Admin auth: connecting to {CLOUDFLARE_WORKER_URL}/auth", xbmc.LOGINFO)
+        try:
+            r = urllib.request.urlopen(req, context=context, timeout=15)
+            raw = r.read().decode('utf-8')
+            xbmc.log(f"[CutCableWizard] Admin auth response: {raw}", xbmc.LOGINFO)
+            result = json.loads(raw)
+        except urllib.error.HTTPError as e:
+            # 403 with {"valid":false} is a normal wrong-password response
+            raw = e.read().decode('utf-8')
+            xbmc.log(f"[CutCableWizard] Admin auth HTTP {e.code}: {raw}", xbmc.LOGINFO)
+            result = json.loads(raw)
+        if result.get('valid'):
+            _admin_mode           = True
+            _admin_password_cache = password
+            xbmc.log("[CutCableWizard] Admin mode unlocked.", xbmc.LOGINFO)
+            xbmcgui.Dialog().ok(
+                "Admin Mode Unlocked",
+                "Admin mode is now active.\n\n"
+                "[B]Developer mode:[/B] First Run Setup will be suppressed "
+                "after the next install — Kodi will boot normally.\n\n"
+                "[B]Admin build:[/B] Now visible in the Install Build menu.\n\n"
+                "Both features clear automatically after one install."
+            )
+            return True
     except Exception as e:
-        xbmc.log(f"[CutCableWizard] Admin auth error: {e}", xbmc.LOGWARNING)
+        xbmc.log(f"[CutCableWizard] Admin auth error: {type(e).__name__}: {e}", xbmc.LOGWARNING)
         xbmcgui.Dialog().ok(
             "Admin Mode Error",
-            "Could not reach the authentication server.\n\n"
+            f"Could not reach the authentication server.\n\n"
+            f"Error: {type(e).__name__}: {str(e)}\n\n"
             "Please check your internet connection and try again."
         )
         return False
