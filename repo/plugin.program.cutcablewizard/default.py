@@ -112,9 +112,10 @@ def unlock_admin_mode():
         raw    = None
         result = {'valid': False}
         try:
-            f   = xbmcvfs.File(auth_url)
-            raw = f.read().decode('utf-8') if isinstance(f.read(), bytes) else f.read()
+            f    = xbmcvfs.File(auth_url)
+            data = f.read()
             f.close()
+            raw  = data.decode('utf-8') if isinstance(data, bytes) else data
         except Exception as read_err:
             xbmc.log(f"[CutCableWizard] Admin auth xbmcvfs error: {read_err}", xbmc.LOGWARNING)
             # Fall back to urllib if xbmcvfs fails
