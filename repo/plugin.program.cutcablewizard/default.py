@@ -106,28 +106,27 @@ def unlock_admin_mode():
         auth_url = f"{CLOUDFLARE_WORKER_URL}/auth?{params}"
         xbmc.log(f"[CutCableWizard] Admin auth: password chars: {[ord(c) for c in password]}", xbmc.LOGINFO)
         xbmc.log(f"[CutCableWizard] Admin auth: connecting to {auth_url}", xbmc.LOGINFO)
+        # Quick test — also try the manifest URL to confirm urllib works at all
+        test_result = get_json(MANIFEST_URL)
+        xbmc.log(f"[CutCableWizard] Admin auth: manifest reachable: {test_result is not None}", xbmc.LOGINFO)
 
         # Use xbmcvfs to make the HTTP request — more reliable than urllib
         # on Android/FireTV where urllib can throw error 1042.
         raw    = None
         result = {'valid': False}
-        # Use Kodi's executeJSONRPC-style HTTP via the addon's built-in
-        # HTTP handler which works reliably on all platforms including Android.
+        # Use the same get_json() pattern as the manifest fetch — this is
+        # the only HTTP method confirmed working on FireTV/Android in this addon.
         try:
-            import http.client
-            import socket
-            parsed   = urllib.parse.urlparse(auth_url)
-            hostname = parsed.hostname
-            path     = parsed.path + ('?' + parsed.query if parsed.query else '')
-            conn     = http.client.HTTPSConnection(hostname, timeout=15,
-                           context=ssl._create_unverified_context())
-            conn.request('GET', path, headers={'User-Agent': 'Kodi-Wizard'})
-            resp = conn.getresponse()
-            raw  = resp.read().decode('utf-8')
-            conn.close()
-            xbmc.log(f"[CutCableWizard] Admin auth http.client status: {resp.status}", xbmc.LOGINFO)
-        except Exception as http_err:
-            xbmc.log(f"[CutCableWizard] Admin auth http.client error: {type(http_err).__name__}: {http_err}", xbmc.LOGWARNING)
+            context_  = ssl._create_unverified_context()
+            req       = urllib.request.Request(
+                auth_url,
+                headers={'User-Agent': 'Kodi-Wizard'}
+            )
+            with urllib.request.urlopen(req, context=context_, timeout=15) as r:
+                raw = r.read().decode('utf-8')
+            xbmc.log(f"[CutCableWizard] Admin auth urllib status: 200", xbmc.LOGINFO)
+        except Exception as e:
+            xbmc.log(f"[CutCableWizard] Admin auth urllib error: {type(e).__name__}: {e}", xbmc.LOGWARNING)
 
         xbmc.log(f"[CutCableWizard] Admin auth raw response: [{raw}]", xbmc.LOGINFO)
         if raw:
