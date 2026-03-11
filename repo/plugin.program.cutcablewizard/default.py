@@ -111,15 +111,24 @@ def unlock_admin_mode():
             method='GET'
         )
         xbmc.log(f"[CutCableWizard] Admin auth: connecting to {CLOUDFLARE_WORKER_URL}/auth", xbmc.LOGINFO)
+        raw    = None
+        result = {'valid': False}
         try:
-            r = urllib.request.urlopen(req, context=context, timeout=15)
+            r   = urllib.request.urlopen(req, context=context, timeout=15)
             raw = r.read().decode('utf-8')
-            xbmc.log(f"[CutCableWizard] Admin auth response: {raw}", xbmc.LOGINFO)
-            result = json.loads(raw)
         except urllib.error.HTTPError as e:
-            raw = e.read().decode('utf-8')
-            xbmc.log(f"[CutCableWizard] Admin auth HTTP {e.code}: {raw}", xbmc.LOGINFO)
-            result = json.loads(raw) if raw else {'valid': False}
+            # 403 wrong password — read body safely
+            try:
+                raw = e.read().decode('utf-8')
+            except Exception:
+                raw = ''
+        xbmc.log(f"[CutCableWizard] Admin auth raw response: [{raw}]", xbmc.LOGINFO)
+        if raw:
+            try:
+                result = json.loads(raw)
+            except Exception:
+                xbmc.log(f"[CutCableWizard] Admin auth JSON parse failed on: [{raw}]", xbmc.LOGWARNING)
+                result = {'valid': False}
         if result.get('valid'):
             _admin_mode           = True
             _admin_password_cache = password
@@ -143,7 +152,8 @@ def unlock_admin_mode():
         )
         return False
 
-    xbmcgui.Dialog().ok("Admin Mode", "Incorrect password.")
+    if not result.get('valid'):
+        xbmcgui.Dialog().ok("Admin Mode", "Incorrect password.")
     return False
 
 
