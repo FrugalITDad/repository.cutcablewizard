@@ -110,6 +110,7 @@ def unlock_admin_mode():
             headers={'User-Agent': 'Kodi-Wizard'},
             method='GET'
         )
+        xbmc.log(f"[CutCableWizard] Admin auth: password chars: {[ord(c) for c in password]}", xbmc.LOGINFO)
         xbmc.log(f"[CutCableWizard] Admin auth: connecting to {CLOUDFLARE_WORKER_URL}/auth", xbmc.LOGINFO)
         raw    = None
         result = {'valid': False}
