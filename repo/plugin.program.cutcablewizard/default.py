@@ -7,19 +7,8 @@ ADDON    = xbmcaddon.Addon()
 ADDON_ID = ADDON.getAddonInfo('id')
 HOME     = xbmcvfs.translatePath("special://home/")
 
-MANIFEST_URL          = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
-CLOUDFLARE_WORKER_URL = "https://cutcable-admin.wcouse3.workers.dev"   # ← replace after deploying Worker
-
-# Trigger files written to HOME root
-FIRSTRUN_STEPS_FILE  = os.path.join(HOME, 'firstrun_steps.txt')
-
-# ---------------------------------------------------------------------------
-# Admin / Developer Mode State
-# ---------------------------------------------------------------------------
-# Both flags are in-memory only — never written to disk.
-# They are automatically cleared when Kodi force-closes after install (os._exit).
-_admin_mode           = False   # True = admin build visible + dev mode active
-_admin_password_cache = None    # Password held for Bearer token during same session
+MANIFEST_URL        = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
+FIRSTRUN_STEPS_FILE = os.path.join(HOME, 'firstrun_steps.txt')
 
 # Human-readable names for the switch-build warning dialog.
 BUILD_NAMES = {
@@ -28,20 +17,19 @@ BUILD_NAMES = {
     'cordcutter_plus_gaming':  'CordCutter Plus w Gaming',
     'cordcutter_pro':          'CordCutter Pro',
     'cordcutter_pro_gaming':   'CordCutter Pro w Gaming',
-    'cordcutter_admin':        'CordCutter Admin',
 }
+
+# Internal build IDs that are never shown in the install menu
+HIDDEN_BUILD_IDS = {'cordcutter_fresh_start'}
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def get_json(url, extra_headers=None):
+def get_json(url):
     try:
         context = ssl._create_unverified_context()
-        headers = {'User-Agent': 'Kodi-Wizard'}
-        if extra_headers:
-            headers.update(extra_headers)
-        req = urllib.request.Request(url, headers=headers)
+        req = urllib.request.Request(url, headers={'User-Agent': 'Kodi-Wizard'})
         with urllib.request.urlopen(req, context=context, timeout=15) as r:
             return json.loads(r.read().decode('utf-8'))
     except Exception:
@@ -75,99 +63,6 @@ def get_installed_info():
         return None, data.strip()
     except Exception:
         return None, None
-
-
-# ---------------------------------------------------------------------------
-# Admin Mode
-# ---------------------------------------------------------------------------
-def unlock_admin_mode():
-    """
-    Prompts for the admin password and validates it against the Cloudflare Worker.
-    On success sets _admin_mode and caches the password for the Bearer header.
-    Both are in-memory only and clear when the process exits after install.
-
-    Returns True if successfully unlocked, False otherwise.
-    """
-    global _admin_mode, _admin_password_cache
-
-    password = xbmcgui.Dialog().input(
-        "Admin Mode — Enter Password",
-        type=xbmcgui.INPUT_ALPHANUM,
-        option=xbmcgui.ALPHANUM_HIDE_INPUT
-    )
-    if not password:
-        return False
-
-    try:
-        context = ssl._create_unverified_context()
-        import urllib.parse
-        # URL-encode the password so special characters are preserved.
-        params   = urllib.parse.urlencode({'password': password}, quote_via=urllib.parse.quote)
-        auth_url = f"{CLOUDFLARE_WORKER_URL}/?{params}"
-        xbmc.log(f"[CutCableWizard] Admin auth: password chars: {[ord(c) for c in password]}", xbmc.LOGINFO)
-        xbmc.log(f"[CutCableWizard] Admin auth: connecting to {auth_url}", xbmc.LOGINFO)
-        # Quick test — also try the manifest URL to confirm urllib works at all
-        test_result = get_json(MANIFEST_URL)
-        xbmc.log(f"[CutCableWizard] Admin auth: manifest reachable: {test_result is not None}", xbmc.LOGINFO)
-
-        # Use xbmcvfs to make the HTTP request — more reliable than urllib
-        # on Android/FireTV where urllib can throw error 1042.
-        raw    = None
-        result = {'valid': False}
-        # Use the same get_json() pattern as the manifest fetch — this is
-        # the only HTTP method confirmed working on FireTV/Android in this addon.
-        try:
-            context_  = ssl._create_unverified_context()
-            req       = urllib.request.Request(
-                auth_url,
-                headers={'User-Agent': 'Kodi-Wizard'}
-            )
-            with urllib.request.urlopen(req, context=context_, timeout=15) as r:
-                raw = r.read().decode('utf-8')
-            xbmc.log(f"[CutCableWizard] Admin auth urllib status: 200", xbmc.LOGINFO)
-        except urllib.error.HTTPError as e:
-            body = ''
-            try:
-                body = e.read().decode('utf-8')
-            except Exception:
-                pass
-            xbmc.log(f"[CutCableWizard] Admin auth HTTPError {e.code}: url=[{e.url}] body=[{body}]", xbmc.LOGWARNING)
-        except Exception as e:
-            xbmc.log(f"[CutCableWizard] Admin auth urllib error: {type(e).__name__}: {e}", xbmc.LOGWARNING)
-
-        xbmc.log(f"[CutCableWizard] Admin auth raw response: [{raw}]", xbmc.LOGINFO)
-        if raw:
-            try:
-                result = json.loads(raw)
-            except Exception:
-                xbmc.log(f"[CutCableWizard] Admin auth JSON parse failed on: [{raw}]", xbmc.LOGWARNING)
-                result = {'valid': False}
-        if result.get('valid'):
-            _admin_mode           = True
-            _admin_password_cache = password
-            xbmc.log("[CutCableWizard] Admin mode unlocked.", xbmc.LOGINFO)
-            xbmcgui.Dialog().ok(
-                "Admin Mode Unlocked",
-                "Admin mode is now active.\n\n"
-                "[B]Developer mode:[/B] First Run Setup will be suppressed "
-                "after the next install — Kodi will boot normally.\n\n"
-                "[B]Admin build:[/B] Now visible in the Install Build menu.\n\n"
-                "Both features clear automatically after one install."
-            )
-            return True
-    except Exception as e:
-        xbmc.log(f"[CutCableWizard] Admin auth error: {type(e).__name__}: {e}", xbmc.LOGWARNING)
-        xbmcgui.Dialog().ok(
-            "Admin Mode Error",
-            f"Could not reach the authentication server.\n\n"
-            f"Error: {type(e).__name__}: {str(e)}\n\n"
-            "Please check your internet connection and try again."
-        )
-        return False
-
-    if not result.get('valid'):
-        xbmcgui.Dialog().ok("Admin Mode", "Incorrect password.")
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +121,7 @@ def smart_fresh_start(manifest):
         )
         return False
 
-    builds     = manifest.get('builds', [])
+    builds      = manifest.get('builds', [])
     fresh_build = next((b for b in builds if b['id'] == FRESH_START_BUILD_ID), None)
     if not fresh_build:
         xbmcgui.Dialog().ok(
@@ -301,17 +196,12 @@ def smart_fresh_start(manifest):
 # ---------------------------------------------------------------------------
 # Build Installation
 # ---------------------------------------------------------------------------
-def install_build(url, name, version, build_id,
-                  dev_mode=False, firstrun_steps=None, extra_headers=None):
+def install_build(url, name, version, build_id, firstrun_steps=None):
     """
     Downloads, verifies, and installs a build zip.
 
-    dev_mode=True     — skips writing firstrun.txt so First Run Setup does
-                        not trigger on the next boot (maintenance use).
-    firstrun_steps    — optional list of step names written to firstrun_steps.txt
-                        so service.py only runs those steps. None = all steps.
-    extra_headers     — optional dict of HTTP headers for the download request
-                        (used to pass the Bearer token for the admin build).
+    firstrun_steps — optional list of step names written to firstrun_steps.txt
+                     so service.py only runs those steps. None = all steps.
     """
     zip_path = os.path.join(HOME, "build.zip")
 
@@ -334,10 +224,7 @@ def install_build(url, name, version, build_id,
     try:
         # ── 1. Download ───────────────────────────────────────────────────
         context = ssl._create_unverified_context()
-        headers = {'User-Agent': 'Kodi-Wizard'}
-        if extra_headers:
-            headers.update(extra_headers)
-        req = urllib.request.Request(url, headers=headers)
+        req = urllib.request.Request(url, headers={'User-Agent': 'Kodi-Wizard'})
         with urllib.request.urlopen(req, context=context) as r, open(zip_path, 'wb') as f:
             total = int(r.info().get('Content-Length', 0))
             count = 0
@@ -380,48 +267,28 @@ def install_build(url, name, version, build_id,
                 zf.extract(zipped_file, HOME)
 
         # ── 5. Write trigger files ────────────────────────────────────────
-        # installed_version.txt is always written so the update checker and
-        # build-switch warning work correctly regardless of dev_mode.
         with open(os.path.join(HOME, 'installed_version.txt'), 'w') as f:
             f.write(f"{build_id}|{version}")
 
-        if dev_mode:
-            # Maintenance mode — do NOT write firstrun.txt.
-            # Kodi boots normally with no setup wizard.
-            xbmc.log(
-                f"[CutCableWizard] Dev mode — firstrun suppressed for {build_id}.",
-                xbmc.LOGINFO
-            )
-        else:
-            with open(os.path.join(HOME, 'firstrun.txt'), 'w') as f:
-                f.write("pending")
-            # If specific steps were requested (e.g. admin build), write the
-            # list so service.py knows to skip everything else.
-            if firstrun_steps:
-                with open(FIRSTRUN_STEPS_FILE, 'w') as f:
-                    f.write(','.join(firstrun_steps))
+        with open(os.path.join(HOME, 'firstrun.txt'), 'w') as f:
+            f.write("pending")
+
+        if firstrun_steps:
+            with open(FIRSTRUN_STEPS_FILE, 'w') as f:
+                f.write(','.join(firstrun_steps))
 
         dp.close()
         if os.path.exists(zip_path):
             os.remove(zip_path)
 
         # ── 6. Inform user then force-close ───────────────────────────────
-        if dev_mode:
-            xbmcgui.Dialog().ok(
-                "Install Complete [DEV MODE]",
-                f"[B]{name} v{version}[/B] has been applied.\n\n"
-                "[B]Developer mode:[/B] First Run Setup will NOT run — "
-                "Kodi will boot normally so you can make changes.\n\n"
-                "Kodi will now force close."
-            )
-        else:
-            xbmcgui.Dialog().ok(
-                "Install Complete",
-                f"[B]{name} v{version}[/B] has been applied!\n\n"
-                "Kodi must now FORCE CLOSE to load the new skin.\n\n"
-                "[B]IMPORTANT:[/B] After you re-open Kodi, please wait "
-                "approximately 45 seconds for the First Run Setup to begin automatically."
-            )
+        xbmcgui.Dialog().ok(
+            "Install Complete",
+            f"[B]{name} v{version}[/B] has been applied!\n\n"
+            "Kodi must now FORCE CLOSE to load the new skin.\n\n"
+            "[B]IMPORTANT:[/B] After you re-open Kodi, please wait "
+            "approximately 45 seconds for the First Run Setup to begin automatically."
+        )
         os._exit(1)
 
     except Exception as e:
@@ -436,7 +303,7 @@ def install_build(url, name, version, build_id,
 
 
 # ---------------------------------------------------------------------------
-# Update Check  (called after main menu – daily check is in service.py)
+# Update Check
 # ---------------------------------------------------------------------------
 def check_for_updates(manifest):
     """
@@ -477,22 +344,8 @@ def check_for_updates(manifest):
 # Main Menu
 # ---------------------------------------------------------------------------
 def main_menu():
-    global _admin_mode
-
     manifest = get_json(MANIFEST_URL)
-    title    = "CutCable Wizard [ADMIN MODE]" if _admin_mode else "CutCable Wizard"
-    options  = ["Install Build", "Fresh Start", "Admin Mode"]
-    choice   = xbmcgui.Dialog().select(title, options)
-
-    # ── Admin Mode ─────────────────────────────────────────────────────────
-    if choice == 2:
-        if _admin_mode:
-            xbmcgui.Dialog().ok("Admin Mode", "Admin mode is already active.")
-        else:
-            unlock_admin_mode()
-        # Re-open menu so title updates to [ADMIN MODE] on success
-        main_menu()
-        return
+    choice   = xbmcgui.Dialog().select("CutCable Wizard", ["Install Build", "Fresh Start"])
 
     # ── Install Build ──────────────────────────────────────────────────────
     if choice == 0:
@@ -504,18 +357,10 @@ def main_menu():
             )
             return
 
-        # Public builds — always visible
+        # Filter out internal builds (fresh start, any future admin builds)
         builds = [b for b in manifest.get('builds', [])
-                  if not b.get('admin_only', False)]
-
-        # Admin builds — only visible when admin mode is active.
-        # The fresh start build is excluded even in admin mode since it is
-        # used internally by the Fresh Start menu option only.
-        if _admin_mode:
-            admin_builds = [b for b in manifest.get('builds', [])
-                            if b.get('admin_only', False)
-                            and b['id'] != FRESH_START_BUILD_ID]
-            builds = builds + admin_builds
+                  if b['id'] not in HIDDEN_BUILD_IDS
+                  and not b.get('admin_only', False)]
 
         items = []
         for b in builds:
@@ -527,23 +372,15 @@ def main_menu():
             )
             items.append(item)
 
-        sel = xbmcgui.Dialog().select(title, items, useDetails=True)
+        sel = xbmcgui.Dialog().select("CutCable Wizard", items, useDetails=True)
         if sel != -1:
-            selected       = builds[sel]
-            is_admin_build = selected.get('admin_only', False)
-
+            selected = builds[sel]
             install_build(
                 url            = selected['download_url'],
                 name           = selected['name'],
                 version        = selected['version'],
                 build_id       = selected['id'],
-                dev_mode       = _admin_mode,
-                firstrun_steps = selected.get('firstrun_steps'),
-                # Admin build download is gated by the Cloudflare Worker —
-                # pass the cached password as a Bearer token so the Worker
-                # can verify it server-side before streaming the zip.
-                extra_headers  = {'Authorization': f'Bearer {_admin_password_cache}'}
-                                 if is_admin_build else None
+                firstrun_steps = selected.get('firstrun_steps')
             )
 
     # ── Fresh Start ────────────────────────────────────────────────────────

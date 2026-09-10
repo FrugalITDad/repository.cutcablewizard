@@ -7,12 +7,11 @@ ADDON      = xbmcaddon.Addon()
 HOME       = xbmcvfs.translatePath("special://home/")
 ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
 
-MANIFEST_URL          = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
-FIRSTRUN_FILE         = os.path.join(HOME, 'firstrun.txt')
-INSTALLED_FILE        = os.path.join(HOME, 'installed_version.txt')
-LAST_CHECK_FILE       = os.path.join(HOME, 'last_update_check.txt')
-FIRSTRUN_STEPS_FILE   = os.path.join(HOME, 'firstrun_steps.txt')
-
+MANIFEST_URL        = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
+FIRSTRUN_FILE       = os.path.join(HOME, 'firstrun.txt')
+INSTALLED_FILE      = os.path.join(HOME, 'installed_version.txt')
+LAST_CHECK_FILE     = os.path.join(HOME, 'last_update_check.txt')
+FIRSTRUN_STEPS_FILE = os.path.join(HOME, 'firstrun_steps.txt')
 
 # Seconds to wait after boot before starting First Run Setup.
 # Gives Aeon Nox Silvo time to finish building its menu shortcuts.
@@ -31,6 +30,17 @@ def set_kodi_setting(setting, value):
     }))
 
 
+def disable_addon(addon_id):
+    """Disables an addon via JSON-RPC so it no longer prompts on startup."""
+    xbmc.executeJSONRPC(json.dumps({
+        "jsonrpc": "2.0",
+        "method": "Addons.SetAddonEnabled",
+        "params": {"addonid": addon_id, "enabled": False},
+        "id": 1
+    }))
+    xbmc.log(f"[CutCableWizard] Disabled addon: {addon_id}", xbmc.LOGINFO)
+
+
 def is_addon_installed(addon_id):
     """Returns True if the given addon is installed and enabled in Kodi."""
     result = xbmc.executeJSONRPC(json.dumps({
@@ -47,10 +57,7 @@ def is_addon_installed(addon_id):
 
 
 def is_skin_busy(monitor):
-    """
-    Returns True while Kodi's skin is still loading or a modal is active.
-    Also returns True if Kodi is scanning the library.
-    """
+    """Returns True while the skin is still loading or library is scanning."""
     return (
         xbmc.getCondVisibility("Window.IsActive(busydialog)") or
         xbmc.getCondVisibility("Window.IsActive(10101)") or
@@ -66,26 +73,14 @@ def wait_for_settings_dialog(monitor):
             break
 
 
-def wait_for_trakt_auth(monitor):
+def wait_for_simkl_auth(monitor, step_label):
     """
-    Trakt-specific wait that handles three phases:
+    Simkl-specific auth wait.
 
-    Phase 1 - Settings window:
-        Wait for the Trakt settings dialog to close. The user may close
-        it without authorizing (fine), or Trakt may close it automatically
-        when the user clicks Authorize.
-
-    Phase 2 - Authorization window:
-        After settings close, Trakt opens a custom device-code window.
-        We use System.HasModalDialog to detect ANY modal appearing within
-        8 seconds - this catches Trakt's auth window regardless of its ID.
-        Checking specific window IDs is unreliable as Trakt uses a custom
-        addon window that does not match standard Kodi dialog IDs.
-        Once detected, we wait for it to fully clear before continuing.
-
-    Phase 3 - Confirmation prompt:
-        Trakt authorization requires visiting trakt.tv/activate in a browser.
-        We show an OK prompt so the user controls when first-run continues.
+    Simkl shows a device-code screen within its settings window.
+    We wait for settings to close, detect any follow-on auth modal,
+    then show a confirmation prompt so the user can complete the
+    simkl.com/activate step in a browser before setup continues.
     """
     # Phase 1: wait for settings window to close
     xbmc.sleep(2000)
@@ -93,12 +88,7 @@ def wait_for_trakt_auth(monitor):
         if monitor.waitForAbort(1):
             return
 
-    # Phase 2a: poll for up to 8 seconds for Trakt's auth window to appear.
-    # Short 500ms intervals so we react quickly once it opens.
-    # abortRequested() is used instead of waitForAbort(0) — a zero timeout
-    # is undefined in Kodi's Python API and on Android can return True
-    # immediately, falsely flagging an abort that then causes all subsequent
-    # waitForAbort() calls (including the Step 5 countdown) to exit early.
+    # Phase 2: poll briefly for any follow-on auth modal
     auth_appeared = False
     for _ in range(16):
         if monitor.abortRequested():
@@ -108,25 +98,21 @@ def wait_for_trakt_auth(monitor):
             break
         xbmc.sleep(500)
 
-    # Phase 2b: auth window appeared - wait for it to fully close.
-    # 5 minute timeout matches Trakt device-code expiry.
     if auth_appeared:
-        AUTH_TIMEOUT = 300
         elapsed = 0
-        while elapsed < AUTH_TIMEOUT:
+        while elapsed < 300:
             if not xbmc.getCondVisibility("System.HasModalDialog(true)"):
                 break
             if monitor.waitForAbort(2):
                 return
             elapsed += 2
 
-    # Phase 3: show confirmation so the user controls when first-run continues.
-    # Trakt requires opening trakt.tv/activate on another device - the user
-    # needs time to complete that step before setup moves on.
+    # Phase 3: confirmation — user controls when setup continues
     xbmcgui.Dialog().ok(
-        "Setup (4/5): Trakt",
-        "Trakt authorization window has closed.\n\n"
-        "If you still need to authorize in your browser, do that now.\n\n"
+        step_label,
+        "Simkl settings have closed.\n\n"
+        "If you still need to authorize at [B]simkl.com/activate[/B] "
+        "in your browser, do that now.\n\n"
         "Tap [B]OK[/B] when you are ready to continue setup."
     )
 
@@ -173,18 +159,17 @@ def read_firstrun_steps():
     Regular builds do not write this file so all steps always run.
 
     Step names must match the keys used in run_first_time_setup():
-      device_name, weather, subtitles, iptv_sync,
-      trakt, scrubs_v2, iagl, buffer
+      device_name, weather, subtitles, iptv_sync, simkl, iagl, buffer
     """
     if not os.path.exists(FIRSTRUN_STEPS_FILE):
-        return None   # No filter — run all steps
+        return None
     try:
         with open(FIRSTRUN_STEPS_FILE, 'r') as f:
             steps = {s.strip() for s in f.read().strip().split(',') if s.strip()}
         xbmc.log(f"[CutCableWizard] firstrun_steps filter: {steps}", xbmc.LOGINFO)
         return steps if steps else None
     except Exception:
-        return None   # Unreadable — safe fallback is to run all steps
+        return None
 
 
 def run_first_time_setup(monitor):
@@ -202,9 +187,8 @@ def run_first_time_setup(monitor):
     # ── Wait for Aeon Nox Silvo to finish building menu shortcuts ─────────
     xbmc.log("[CutCableWizard] First Run: waiting 45s for skin to settle.", xbmc.LOGINFO)
     if monitor.waitForAbort(FIRSTRUN_BOOT_DELAY):
-        return  # Kodi shutting down
+        return
 
-    # Re-check trigger in case a force-close happened during the wait
     if not os.path.exists(FIRSTRUN_FILE):
         return
 
@@ -215,11 +199,8 @@ def run_first_time_setup(monitor):
 
     # ── Wait for any addon auth prompts to clear ──────────────────────────
     # Some addons (e.g. JellyCon on the Pro build) show a login dialog
-    # immediately on boot. We hold setup back until all modal dialogs are
-    # gone so the first run questions never appear on top of an auth prompt.
-    # 10 minute ceiling handles slow logins; logs every 30s so it is visible
-    # in the Kodi log if something is unexpectedly blocking.
-    AUTH_WAIT_CEILING = 600  # 10 minutes
+    # immediately on boot. We hold setup back until the screen is clear.
+    AUTH_WAIT_CEILING = 600
     auth_wait_elapsed = 0
     while xbmc.getCondVisibility("System.HasModalDialog(true)"):
         if monitor.waitForAbort(2):
@@ -241,19 +222,14 @@ def run_first_time_setup(monitor):
     dialog = xbmcgui.Dialog()
 
     # ── Determine which steps are active for this build ───────────────────
-    # ALL_STEPS defines the canonical order. read_firstrun_steps() returns
-    # a set of allowed step names from firstrun_steps.txt, or None (= all).
-    # The step counter "X/Y" is computed from the active list so it is always
-    # correct even when steps are skipped for the admin build.
-    ALL_STEPS = ['device_name', 'weather', 'subtitles', 'iptv_sync',
-                 'trakt', 'scrubs_v2', 'iagl', 'buffer']
+    ALL_STEPS = ['subtitles', 'device_name', 'weather', 'simkl',
+                 'iagl', 'iptv_sync', 'buffer']
 
-    allowed   = read_firstrun_steps()   # set of names or None
-    active    = [s for s in ALL_STEPS if allowed is None or s in allowed]
-    total     = len(active)
+    allowed = read_firstrun_steps()
+    active  = [s for s in ALL_STEPS if allowed is None or s in allowed]
+    total   = len(active)
 
     def n(step_name):
-        """Returns the 1-based display index of step_name within active steps."""
         return active.index(step_name) + 1 if step_name in active else 0
 
     xbmc.log(f"[CutCableWizard] First Run active steps ({total}): {active}", xbmc.LOGINFO)
@@ -268,12 +244,19 @@ def run_first_time_setup(monitor):
             set_kodi_setting("services.devicename", name)
 
     # ── Step: Weather ─────────────────────────────────────────────────────
+    # Multi Weather uses a zip code or city name — no GPS lookup.
     if 'weather' in active:
         if dialog.yesno(
             f"Setup ({n('weather')}/{total}): Weather",
             "Would you like to configure your weather location?"
         ):
-            xbmc.executebuiltin("Addon.OpenSettings(weather.gismeteo)")
+            dialog.ok(
+                "Weather Setup",
+                "The Multi Weather settings will now open.\n\n"
+                "Enter your [B]zip code[/B] or [B]city name[/B] in the "
+                "location field, then close settings to continue."
+            )
+            xbmc.executebuiltin("Addon.OpenSettings(weather.multi)")
             wait_for_settings_dialog(monitor)
 
     # ── Step: Subtitles ───────────────────────────────────────────────────
@@ -285,7 +268,6 @@ def run_first_time_setup(monitor):
             set_kodi_setting("subtitles.enabled", True)
 
     # ── Step: IPTV Guide Sync ─────────────────────────────────────────────
-    # Runs before Trakt so the 145s countdown completes with no interruptions.
     if 'iptv_sync' in active:
         xbmc.executebuiltin("RunPlugin(plugin://plugin.program.iptv.merge/?mode=run)")
         dp = xbmcgui.DialogProgress()
@@ -293,7 +275,7 @@ def run_first_time_setup(monitor):
             f"Setup ({n('iptv_sync')}/{total}): IPTV Guide Sync",
             "Syncing Live TV Guide..."
         )
-        total_time = 145
+        total_time = 60
         for i in range(total_time):
             if monitor.waitForAbort(1) or dp.iscanceled():
                 break
@@ -302,39 +284,24 @@ def run_first_time_setup(monitor):
             dp.update(percent, f"Finalizing IPTV Guide setup...\nTime remaining: {remaining}s")
         dp.close()
 
-    # ── Step: Trakt ───────────────────────────────────────────────────────
-    if 'trakt' in active:
-        if is_addon_installed("script.trakt"):
+    # ── Step: Simkl ───────────────────────────────────────────────────────
+    # If the user declines, Simkl is disabled so it does not prompt on
+    # every startup. They can re-enable it later via Kodi addon settings.
+    if 'simkl' in active:
+        if is_addon_installed("script.simkl"):
+            step_label = f"Setup ({n('simkl')}/{total}): Simkl"
             if dialog.yesno(
-                f"Setup ({n('trakt')}/{total}): Trakt",
-                "Would you like to authorize your Trakt account?"
+                step_label,
+                "Would you like to authorize your Simkl account?\n\n"
+                "Simkl tracks your watched movies, TV shows, and anime."
             ):
-                xbmc.executebuiltin("Addon.OpenSettings(script.trakt)")
-                wait_for_trakt_auth(monitor)
+                xbmc.executebuiltin("Addon.OpenSettings(script.simkl)")
+                wait_for_simkl_auth(monitor, step_label)
+            else:
+                disable_addon("script.simkl")
+                xbmc.log("[CutCableWizard] Simkl declined by user — addon disabled.", xbmc.LOGINFO)
         else:
-            xbmc.log("[CutCableWizard] script.trakt not installed – skipping Trakt step.", xbmc.LOGINFO)
-
-    # ── Step: Scrubs V2 Trakt ─────────────────────────────────────────────
-    if 'scrubs_v2' in active:
-        if xbmc.getCondVisibility("System.HasAddon(plugin.video.scrubsv2)"):
-            if dialog.yesno(
-                f"Setup ({n('scrubs_v2')}/{total}): Scrubs V2",
-                "Would you like to authorize Trakt inside Scrubs V2?"
-            ):
-                dialog.ok(
-                    "Scrubs V2 - Trakt Authorization",
-                    "The Scrubs V2 Tools menu will now open.\n\n"
-                    "Select [B]Trakt: Authorize[/B] from the list, complete the "
-                    "authorization, then press Back to continue setup."
-                )
-                xbmc.executebuiltin(
-                    'ActivateWindow(Videos,"plugin://plugin.video.scrubsv2/?action=tools_menu",return)'
-                )
-                while xbmc.getCondVisibility("Window.IsActive(videos)"):
-                    if monitor.waitForAbort(1):
-                        break
-        else:
-            xbmc.log("[CutCableWizard] plugin.video.scrubsv2 not installed – skipping Scrubs V2 step.", xbmc.LOGINFO)
+            xbmc.log("[CutCableWizard] script.simkl not installed – skipping Simkl step.", xbmc.LOGINFO)
 
     # ── Step: IAGL Archive.org ────────────────────────────────────────────
     if 'iagl' in active:
@@ -382,10 +349,10 @@ def run_first_time_setup(monitor):
             xbmc.log("[CutCableWizard] script.ezmaintenanceplus not installed – skipping buffer step.", xbmc.LOGINFO)
 
     # ── Cleanup & finish ──────────────────────────────────────────────────
-    for f in [FIRSTRUN_FILE, FIRSTRUN_STEPS_FILE]:
+    for trigger in [FIRSTRUN_FILE, FIRSTRUN_STEPS_FILE]:
         try:
-            if os.path.exists(f):
-                os.remove(f)
+            if os.path.exists(trigger):
+                os.remove(trigger)
         except Exception:
             pass
 
@@ -393,7 +360,8 @@ def run_first_time_setup(monitor):
     dialog.ok(
         "Setup Complete",
         "Your CordCutter build is fully configured and ready to use!\n\n"
-        "[B]Note:[/B] Your weather location will not appear until the next time you restart Kodi.\n\n"
+        "[B]Note:[/B] Your weather location will not appear until the next "
+        "time you restart Kodi.\n\n"
         "Enjoy your new setup."
     )
     xbmc.log("[CutCableWizard] First Run setup complete.", xbmc.LOGINFO)
@@ -403,20 +371,15 @@ def run_first_time_setup(monitor):
 # Daily Update Check
 # ---------------------------------------------------------------------------
 def should_check_for_updates():
-    """
-    Returns True once per day.
-    Stores the last-checked date in last_update_check.txt.
-    """
-    today = datetime.date.today().isoformat()   # e.g. "2025-11-01"
+    """Returns True once per day, storing the date in last_update_check.txt."""
+    today = datetime.date.today().isoformat()
     if os.path.exists(LAST_CHECK_FILE):
         try:
             with open(LAST_CHECK_FILE, 'r') as f:
-                last = f.read().strip()
-            if last == today:
-                return False   # Already checked today
+                if f.read().strip() == today:
+                    return False
         except Exception:
             pass
-    # Write today's date
     try:
         with open(LAST_CHECK_FILE, 'w') as f:
             f.write(today)
@@ -428,19 +391,18 @@ def should_check_for_updates():
 def run_update_check():
     """
     Fetches the manifest and prompts the user if a newer version of their
-    installed build is available. Runs silently if no build is installed
-    or if the manifest cannot be reached.
+    installed build is available. Runs silently on any failure.
     """
     build_id, installed_version = get_installed_info()
     if not build_id or not installed_version:
-        return   # Nothing installed to compare
+        return
 
     manifest = get_json(MANIFEST_URL)
     if not manifest:
         xbmc.log("[CutCableWizard] Update check: could not reach manifest.", xbmc.LOGWARNING)
         return
 
-    builds = manifest.get('builds', [])
+    builds        = manifest.get('builds', [])
     current_build = next((b for b in builds if b['id'] == build_id), None)
     if not current_build:
         xbmc.log(f"[CutCableWizard] Update check: build '{build_id}' not found in manifest.", xbmc.LOGWARNING)
@@ -453,7 +415,6 @@ def run_update_check():
 
     xbmc.log(f"[CutCableWizard] Update available: {build_id} v{installed_version} → v{latest_version}", xbmc.LOGINFO)
 
-    # Prompt the user
     if xbmcgui.Dialog().yesno(
         "Build Update Available",
         f"A new version of [B]{current_build['name']}[/B] is available!\n\n"
@@ -462,8 +423,7 @@ def run_update_check():
         "Would you like to update now?\n"
         "(You can also update later via the CutCable Wizard.)"
     ):
-        # Launch the wizard so install_build handles the full process
-        xbmc.executebuiltin(f"RunAddon(plugin.program.cutcablewizard)")
+        xbmc.executebuiltin("RunAddon(plugin.program.cutcablewizard)")
 
 
 # ---------------------------------------------------------------------------
@@ -473,18 +433,12 @@ def run_service():
     monitor = xbmc.Monitor()
     xbmc.log("[CutCableWizard] Service started.", xbmc.LOGINFO)
 
-    # ── First Run setup (only when a build was just installed) ──────────
     if os.path.exists(FIRSTRUN_FILE):
         run_first_time_setup(monitor)
-
-    # ── Daily update check (skipped when first run setup is pending) ─────
     elif should_check_for_updates():
-        # Give Kodi a moment to fully load before showing any dialog
         if not monitor.waitForAbort(15):
             run_update_check()
 
-    # ── Keep the service alive ────────────────────────────────────────────
-    # The service must stay running so Kodi doesn't mark the addon as broken.
     while not monitor.waitForAbort(3600):
         pass
 
