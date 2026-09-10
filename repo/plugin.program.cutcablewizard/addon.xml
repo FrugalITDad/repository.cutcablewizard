@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <addon id="plugin.program.cutcablewizard"
        name="CutCableWizard"
-       version="2.3.3"
+       version="2.3.4"
        provider-name="FrugalITDad">
     <requires>
         <import addon="xbmc.python" version="3.0.0" />
@@ -10,8 +10,11 @@
         <import addon="inputstream.ffmpegdirect" optional="true" />
         <import addon="inputstream.rtmp" optional="true" />
         <import addon="plugin.program.iptv.merge" optional="true" />
-        <import addon="plugin.video.scrubsv2" optional="true" />
-        <import addon="script.trakt" optional="true" />
+        <import addon="plugin.program.iagl" optional="true" />
+        <import addon="script.simkl" optional="true" />
+        <import addon="script.ezmaintenanceplus" optional="true" />
+        <import addon="weather.multi" optional="true" />
+        <import addon="plugin.video.jellycon" optional="true" />
     </requires>
 
     <extension point="xbmc.python.pluginsource" library="default.py">
@@ -23,7 +26,8 @@
         <description lang="en_US">
             Installs and manages CordCutter builds for Fire TV and Google TV devices running Kodi 21.
             Features automatic daily update notifications, a full fresh start tool,
-            and a guided first-run setup for Live TV, Weather, Subtitles, and Trakt.
+            and a guided first-run setup for Subtitles, Device Name, Weather, Simkl,
+            IAGL Archive.org, Live TV Guide sync, and buffer optimization.
         </description>
         <platform>all</platform>
         <language>en_US</language>
