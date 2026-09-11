@@ -5,7 +5,6 @@ import xbmc, xbmcgui, xbmcaddon, xbmcvfs, os, json, datetime, ssl, urllib.reques
 # ---------------------------------------------------------------------------
 ADDON      = xbmcaddon.Addon()
 HOME       = xbmcvfs.translatePath("special://home/")
-ADDON_DATA = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
 
 MANIFEST_URL        = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
 FIRSTRUN_FILE       = os.path.join(HOME, 'firstrun.txt')
@@ -52,21 +51,6 @@ def disable_addon(addon_id):
     xbmc.log(f"[CutCableWizard] Disabled addon: {addon_id}", xbmc.LOGINFO)
 
 
-def is_addon_installed(addon_id):
-    """Returns True if the given addon is installed and enabled in Kodi."""
-    result = xbmc.executeJSONRPC(json.dumps({
-        "jsonrpc": "2.0",
-        "method": "Addons.GetAddonDetails",
-        "params": {"addonid": addon_id, "properties": ["enabled"]},
-        "id": 1
-    }))
-    try:
-        data = json.loads(result)
-        return 'error' not in data and data.get('result', {}).get('addon', {}).get('enabled', False)
-    except Exception:
-        return False
-
-
 def is_addon_present(addon_id):
     """Returns True if the addon exists in Kodi regardless of enabled state."""
     result = xbmc.executeJSONRPC(json.dumps({
@@ -91,6 +75,11 @@ def is_skin_busy(monitor):
     )
 
 
+def is_non_home_window_active():
+    """Returns True when any window other than the Kodi home screen is active."""
+    return not xbmc.getCondVisibility("Window.IsActive(home)")
+
+
 def wait_for_settings_dialog(monitor):
     """Block until the addon settings dialog is dismissed."""
     xbmc.sleep(2000)
@@ -103,18 +92,16 @@ def wait_for_simkl_auth(monitor, step_label):
     """
     Simkl-specific auth wait.
 
-    Simkl shows a device-code screen within its settings window.
-    We wait for settings to close, detect any follow-on auth modal,
-    then show a confirmation prompt so the user can complete the
-    simkl.com/activate step in a browser before setup continues.
+    Phase 1 — wait for the settings window to close.
+    Phase 2 — poll briefly for any follow-on auth modal to appear and clear.
+    Phase 3 — show a confirmation prompt so the user controls when setup continues,
+               allowing time to complete simkl.com/activate in a browser.
     """
-    # Phase 1: wait for settings window to close
     xbmc.sleep(2000)
     while xbmc.getCondVisibility("Window.IsActive(addonsettings)"):
         if monitor.waitForAbort(1):
             return
 
-    # Phase 2: poll briefly for any follow-on auth modal
     auth_appeared = False
     for _ in range(16):
         if monitor.abortRequested():
@@ -133,7 +120,6 @@ def wait_for_simkl_auth(monitor, step_label):
                 return
             elapsed += 2
 
-    # Phase 3: confirmation — user controls when setup continues
     xbmcgui.Dialog().ok(
         step_label,
         "Simkl settings have closed.\n\n"
@@ -141,6 +127,58 @@ def wait_for_simkl_auth(monitor, step_label):
         "in your browser, do that now.\n\n"
         "Tap [B]OK[/B] when you are ready to continue setup."
     )
+
+
+def wait_for_external_window(monitor, timeout_appear=10, timeout_close=300):
+    """
+    Generic wait for an asynchronously launched window (RunPlugin, RunAddon).
+
+    Phase 1 — polls every 500ms for up to `timeout_appear` seconds waiting
+               for any non-home window to become active. Checks programs
+               window, modal dialogs, and any non-home window so the detection
+               works regardless of how the addon renders.
+    Phase 2 — once the window is detected, waits for all activity to clear
+               before returning, with a 500ms grace period to avoid false
+               exits during internal page transitions.
+
+    Returns True if a window appeared and closed, False if it never appeared.
+    """
+    # Phase 1: wait for the window to appear
+    appeared  = False
+    intervals = timeout_appear * 2  # 500ms polling
+    for _ in range(intervals):
+        if monitor.abortRequested():
+            return False
+        if (xbmc.getCondVisibility("Window.IsActive(programs)") or
+                xbmc.getCondVisibility("System.HasModalDialog(true)") or
+                is_non_home_window_active()):
+            appeared = True
+            break
+        xbmc.sleep(500)
+
+    if not appeared:
+        return False
+
+    # Phase 2: wait for everything to clear
+    elapsed = 0
+    while elapsed < timeout_close:
+        if monitor.abortRequested():
+            break
+        prog_active  = xbmc.getCondVisibility("Window.IsActive(programs)")
+        modal_active = xbmc.getCondVisibility("System.HasModalDialog(true)")
+        non_home     = is_non_home_window_active()
+        if not (prog_active or modal_active or non_home):
+            # Grace period — confirm the clear isn't a transient gap
+            xbmc.sleep(500)
+            if not (xbmc.getCondVisibility("Window.IsActive(programs)") or
+                    xbmc.getCondVisibility("System.HasModalDialog(true)") or
+                    is_non_home_window_active()):
+                break
+        if monitor.waitForAbort(1):
+            break
+        elapsed += 1
+
+    return True
 
 
 def get_json(url):
@@ -201,7 +239,7 @@ def run_first_time_setup(monitor):
     The trigger file is deleted ONLY after full completion so a crash
     mid-setup re-triggers setup on the next Kodi boot.
 
-    If firstrun_steps.txt exists, only the listed steps are shown.
+    If firstrun_steps.txt exists only the listed steps are shown.
     The step counter (X/Y) is computed from the active steps.
     """
 
@@ -219,6 +257,9 @@ def run_first_time_setup(monitor):
             return
 
     # ── Wait for any addon auth prompts to clear ──────────────────────────
+    # Some addons (e.g. JellyCon) show a login dialog immediately on boot.
+    # Hold setup back until the screen is clear. 10 minute ceiling handles
+    # slow logins; logs every 30s so it is visible in the Kodi log.
     AUTH_WAIT_CEILING = 600
     auth_wait_elapsed = 0
     while xbmc.getCondVisibility("System.HasModalDialog(true)"):
@@ -241,8 +282,6 @@ def run_first_time_setup(monitor):
     dialog = xbmcgui.Dialog()
 
     # ── Determine which steps are active for this build ───────────────────
-    # ALL_STEPS defines the canonical order — builds.json firstrun_steps
-    # lists which of these to include per build.
     ALL_STEPS = ['subtitles', 'weather', 'device_name', 'simkl',
                  'jellycon', 'iagl', 'iptv_sync', 'buffer']
 
@@ -264,7 +303,6 @@ def run_first_time_setup(monitor):
             set_kodi_setting("subtitles.enabled", True)
 
     # ── Step: Weather ─────────────────────────────────────────────────────
-    # Multi Weather uses a zip code or city name — no GPS lookup.
     if 'weather' in active:
         if dialog.yesno(
             f"Setup ({n('weather')}/{total}): Weather",
@@ -299,8 +337,8 @@ def run_first_time_setup(monitor):
             set_kodi_setting("services.devicename", name)
 
     # ── Step: Simkl ───────────────────────────────────────────────────────
-    # Enable the addon if accepted, disable if declined so it does not
-    # prompt on every Kodi launch.
+    # Enable if accepted so it launches correctly. Disable if declined so
+    # it does not prompt on every Kodi boot.
     if 'simkl' in active:
         if is_addon_present("script.simkl"):
             step_label = f"Setup ({n('simkl')}/{total}): Simkl"
@@ -315,13 +353,10 @@ def run_first_time_setup(monitor):
                 wait_for_simkl_auth(monitor, step_label)
             else:
                 disable_addon("script.simkl")
-                xbmc.log("[CutCableWizard] Simkl declined — addon disabled.", xbmc.LOGINFO)
         else:
-            xbmc.log("[CutCableWizard] script.simkl not found – skipping Simkl step.", xbmc.LOGINFO)
+            xbmc.log("[CutCableWizard] script.simkl not found – skipping.", xbmc.LOGINFO)
 
-    # ── Step: JellyCon ───────────────────────────────────────────────────
-    # Pro builds include JellyCon for Jellyfin server integration.
-    # The user needs their Jellyfin server URL and credentials ready.
+    # ── Step: JellyCon ────────────────────────────────────────────────────
     if 'jellycon' in active:
         if is_addon_present("plugin.video.jellycon"):
             if dialog.yesno(
@@ -338,7 +373,7 @@ def run_first_time_setup(monitor):
                 xbmc.executebuiltin("Addon.OpenSettings(plugin.video.jellycon)")
                 wait_for_settings_dialog(monitor)
         else:
-            xbmc.log("[CutCableWizard] plugin.video.jellycon not found – skipping JellyCon step.", xbmc.LOGINFO)
+            xbmc.log("[CutCableWizard] plugin.video.jellycon not found – skipping.", xbmc.LOGINFO)
 
     # ── Step: IAGL Archive.org ────────────────────────────────────────────
     if 'iagl' in active:
@@ -358,10 +393,9 @@ def run_first_time_setup(monitor):
                 xbmc.executebuiltin("Addon.OpenSettings(plugin.program.iagl)")
                 wait_for_settings_dialog(monitor)
         else:
-            xbmc.log("[CutCableWizard] plugin.program.iagl not found – skipping IAGL step.", xbmc.LOGINFO)
+            xbmc.log("[CutCableWizard] plugin.program.iagl not found – skipping.", xbmc.LOGINFO)
 
     # ── Step: IPTV Guide Sync ─────────────────────────────────────────────
-    # Enable the addon first in case it was disabled, then trigger the merge.
     if 'iptv_sync' in active:
         enable_addon("plugin.program.iptv.merge")
         xbmc.sleep(1000)
@@ -375,9 +409,10 @@ def run_first_time_setup(monitor):
         for i in range(total_time):
             if monitor.waitForAbort(1) or dp.iscanceled():
                 break
-            percent   = int((i / float(total_time)) * 100)
-            remaining = total_time - i
-            dp.update(percent, f"Finalizing IPTV Guide setup...\nTime remaining: {remaining}s")
+            dp.update(
+                int((i / float(total_time)) * 100),
+                f"Finalizing IPTV Guide setup...\nTime remaining: {total_time - i}s"
+            )
         dp.close()
 
     # ── Step: EZ Maintenance+ Buffer Optimization ─────────────────────────
@@ -395,46 +430,9 @@ def run_first_time_setup(monitor):
                     "settings for this device, then close the screen to continue."
                 )
                 xbmc.executebuiltin("RunPlugin(plugin://script.ezmaintenanceplus/?url=ur&action=adv_settings&name)")
-                # Wait for the advanced settings window to appear before monitoring.
-                # RunPlugin is asynchronous so the window may take a few seconds
-                # to open — we poll for up to 10 seconds before giving up.
-                appeared = False
-                for _ in range(20):
-                    if monitor.abortRequested():
-                        break
-                    if (xbmc.getCondVisibility("Window.IsActive(programs)") or
-                            xbmc.getCondVisibility("System.HasModalDialog(true)")):
-                        appeared = True
-                        break
-                    xbmc.sleep(500)
-                # Wait for all EZ Maintenance+ windows to fully close before
-                # showing the Setup Complete message. We check three conditions
-                # to catch the window regardless of how EZ Maintenance+ renders:
-                #   - programs window (script/plugin window)
-                #   - any modal dialog
-                #   - any non-home top-level window (fallback)
-                # A 500ms grace period after the window clears avoids a false
-                # clear if the window briefly drops between pages.
-                if appeared:
-                    while True:
-                        if monitor.abortRequested():
-                            break
-                        programs_active = xbmc.getCondVisibility("Window.IsActive(programs)")
-                        modal_active    = xbmc.getCondVisibility("System.HasModalDialog(true)")
-                        non_home_active = not xbmc.getCondVisibility("Window.IsActive(home)")
-                        if not (programs_active or modal_active or non_home_active):
-                            # All clear — wait briefly to confirm it's not
-                            # just a transient gap between window transitions
-                            xbmc.sleep(500)
-                            programs_active = xbmc.getCondVisibility("Window.IsActive(programs)")
-                            modal_active    = xbmc.getCondVisibility("System.HasModalDialog(true)")
-                            non_home_active = not xbmc.getCondVisibility("Window.IsActive(home)")
-                            if not (programs_active or modal_active or non_home_active):
-                                break
-                        if monitor.waitForAbort(1):
-                            break
+                wait_for_external_window(monitor, timeout_appear=10, timeout_close=300)
         else:
-            xbmc.log("[CutCableWizard] script.ezmaintenanceplus not found – skipping buffer step.", xbmc.LOGINFO)
+            xbmc.log("[CutCableWizard] script.ezmaintenanceplus not found – skipping.", xbmc.LOGINFO)
 
     # ── Cleanup & finish ──────────────────────────────────────────────────
     for trigger in [FIRSTRUN_FILE, FIRSTRUN_STEPS_FILE]:
