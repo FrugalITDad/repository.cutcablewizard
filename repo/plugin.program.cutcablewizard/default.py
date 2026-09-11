@@ -332,6 +332,18 @@ def trigger_first_run_setup(manifest):
     ):
         return
 
+    # Disable addons that auto-launch on boot so they don't create pop-up
+    # windows before First Run Setup starts on the next boot.
+    # service.py re-enables them as needed during the actual setup steps.
+    for addon_id in ['script.simkl', 'plugin.program.iptv.merge']:
+        xbmc.executeJSONRPC(json.dumps({
+            "jsonrpc": "2.0",
+            "method": "Addons.SetAddonEnabled",
+            "params": {"addonid": addon_id, "enabled": False},
+            "id": 1
+        }))
+        xbmc.log(f"[CutCableWizard] Pre-setup: disabled {addon_id}", xbmc.LOGINFO)
+
     # Write trigger files
     try:
         with open(os.path.join(HOME, 'firstrun.txt'), 'w') as f:

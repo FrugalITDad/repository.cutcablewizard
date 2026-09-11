@@ -365,7 +365,7 @@ def run_first_time_setup(monitor):
     if 'iptv_sync' in active:
         enable_addon("plugin.program.iptv.merge")
         xbmc.sleep(1000)
-        xbmc.executebuiltin("RunPlugin(plugin://plugin.program.iptv.merge/?mode=run)")
+        xbmc.executebuiltin("RunPlugin(plugin://plugin.program.iptv.merge/?_=merge)")
         dp = xbmcgui.DialogProgress()
         dp.create(
             f"Setup ({n('iptv_sync')}/{total}): IPTV Guide Sync",
