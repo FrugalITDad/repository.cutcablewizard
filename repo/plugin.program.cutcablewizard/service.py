@@ -407,10 +407,30 @@ def run_first_time_setup(monitor):
                         appeared = True
                         break
                     xbmc.sleep(500)
-                # Now wait for the window to fully close before continuing.
+                # Wait for all EZ Maintenance+ windows to fully close before
+                # showing the Setup Complete message. We check three conditions
+                # to catch the window regardless of how EZ Maintenance+ renders:
+                #   - programs window (script/plugin window)
+                #   - any modal dialog
+                #   - any non-home top-level window (fallback)
+                # A 500ms grace period after the window clears avoids a false
+                # clear if the window briefly drops between pages.
                 if appeared:
-                    while (xbmc.getCondVisibility("Window.IsActive(programs)") or
-                           xbmc.getCondVisibility("System.HasModalDialog(true)")):
+                    while True:
+                        if monitor.abortRequested():
+                            break
+                        programs_active = xbmc.getCondVisibility("Window.IsActive(programs)")
+                        modal_active    = xbmc.getCondVisibility("System.HasModalDialog(true)")
+                        non_home_active = not xbmc.getCondVisibility("Window.IsActive(home)")
+                        if not (programs_active or modal_active or non_home_active):
+                            # All clear — wait briefly to confirm it's not
+                            # just a transient gap between window transitions
+                            xbmc.sleep(500)
+                            programs_active = xbmc.getCondVisibility("Window.IsActive(programs)")
+                            modal_active    = xbmc.getCondVisibility("System.HasModalDialog(true)")
+                            non_home_active = not xbmc.getCondVisibility("Window.IsActive(home)")
+                            if not (programs_active or modal_active or non_home_active):
+                                break
                         if monitor.waitForAbort(1):
                             break
         else:
