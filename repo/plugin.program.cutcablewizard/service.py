@@ -371,7 +371,7 @@ def run_first_time_setup(monitor):
             f"Setup ({n('iptv_sync')}/{total}): IPTV Guide Sync",
             "Syncing Live TV Guide..."
         )
-        total_time = 60
+        total_time = 90
         for i in range(total_time):
             if monitor.waitForAbort(1) or dp.iscanceled():
                 break
@@ -396,7 +396,7 @@ def run_first_time_setup(monitor):
                     "settings for this device.\n\n"
                     "Close the menu when done to complete setup."
                 )
-                xbmc.executebuiltin("RunAddon(script.ezmaintenanceplus)")
+                xbmc.executebuiltin("RunPlugin(plugin://script.ezmaintenanceplus/?url=ur&action=adv_settings&name)")
                 xbmc.sleep(2000)
                 while (xbmc.getCondVisibility("Window.IsActive(programs)") or
                        xbmc.getCondVisibility("System.HasModalDialog(true)")):
