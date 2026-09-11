@@ -390,18 +390,29 @@ def run_first_time_setup(monitor):
             ):
                 dialog.ok(
                     "Buffer Optimization",
-                    "The EZ Maintenance+ menu will now open.\n\n"
-                    "Select [B]ADVANCED SETTINGS (BUFFER SIZE)[/B] from the menu, "
-                    "then choose [B]USE OPTIMAL[/B] to apply the best buffer "
-                    "settings for this device.\n\n"
-                    "Close the menu when done to complete setup."
+                    "The Advanced Settings screen will now open.\n\n"
+                    "Select [B]USE OPTIMAL[/B] to apply the best buffer "
+                    "settings for this device, then close the screen to continue."
                 )
                 xbmc.executebuiltin("RunPlugin(plugin://script.ezmaintenanceplus/?url=ur&action=adv_settings&name)")
-                xbmc.sleep(2000)
-                while (xbmc.getCondVisibility("Window.IsActive(programs)") or
-                       xbmc.getCondVisibility("System.HasModalDialog(true)")):
-                    if monitor.waitForAbort(1):
+                # Wait for the advanced settings window to appear before monitoring.
+                # RunPlugin is asynchronous so the window may take a few seconds
+                # to open — we poll for up to 10 seconds before giving up.
+                appeared = False
+                for _ in range(20):
+                    if monitor.abortRequested():
                         break
+                    if (xbmc.getCondVisibility("Window.IsActive(programs)") or
+                            xbmc.getCondVisibility("System.HasModalDialog(true)")):
+                        appeared = True
+                        break
+                    xbmc.sleep(500)
+                # Now wait for the window to fully close before continuing.
+                if appeared:
+                    while (xbmc.getCondVisibility("Window.IsActive(programs)") or
+                           xbmc.getCondVisibility("System.HasModalDialog(true)")):
+                        if monitor.waitForAbort(1):
+                            break
         else:
             xbmc.log("[CutCableWizard] script.ezmaintenanceplus not found – skipping buffer step.", xbmc.LOGINFO)
 
