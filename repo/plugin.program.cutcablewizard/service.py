@@ -30,6 +30,17 @@ def set_kodi_setting(setting, value):
     }))
 
 
+def enable_addon(addon_id):
+    """Enables an addon via JSON-RPC."""
+    xbmc.executeJSONRPC(json.dumps({
+        "jsonrpc": "2.0",
+        "method": "Addons.SetAddonEnabled",
+        "params": {"addonid": addon_id, "enabled": True},
+        "id": 1
+    }))
+    xbmc.log(f"[CutCableWizard] Enabled addon: {addon_id}", xbmc.LOGINFO)
+
+
 def disable_addon(addon_id):
     """Disables an addon via JSON-RPC so it no longer prompts on startup."""
     xbmc.executeJSONRPC(json.dumps({
@@ -52,6 +63,21 @@ def is_addon_installed(addon_id):
     try:
         data = json.loads(result)
         return 'error' not in data and data.get('result', {}).get('addon', {}).get('enabled', False)
+    except Exception:
+        return False
+
+
+def is_addon_present(addon_id):
+    """Returns True if the addon exists in Kodi regardless of enabled state."""
+    result = xbmc.executeJSONRPC(json.dumps({
+        "jsonrpc": "2.0",
+        "method": "Addons.GetAddonDetails",
+        "params": {"addonid": addon_id, "properties": ["enabled"]},
+        "id": 1
+    }))
+    try:
+        data = json.loads(result)
+        return 'error' not in data and 'addon' in data.get('result', {})
     except Exception:
         return False
 
@@ -154,12 +180,8 @@ def read_firstrun_steps():
     Reads firstrun_steps.txt and returns a set of allowed step names,
     or None if the file does not exist (meaning run all steps).
 
-    The file is written by install_build() in default.py when a build
-    has a firstrun_steps list in builds.json (e.g. the admin build).
-    Regular builds do not write this file so all steps always run.
-
-    Step names must match the keys used in run_first_time_setup():
-      device_name, weather, subtitles, iptv_sync, simkl, iagl, buffer
+    Step names used in run_first_time_setup():
+      subtitles, weather, device_name, simkl, jellycon, iagl, iptv_sync, buffer
     """
     if not os.path.exists(FIRSTRUN_STEPS_FILE):
         return None
@@ -175,13 +197,12 @@ def read_firstrun_steps():
 def run_first_time_setup(monitor):
     """
     Runs the interactive setup wizard.
-    Called only when firstrun.txt exists (written by install_build).
-    The trigger file is deleted ONLY after the full setup completes,
-    so a crash mid-setup will re-trigger setup on the next Kodi boot.
+    Called when firstrun.txt exists (written by install_build or Re-run Setup).
+    The trigger file is deleted ONLY after full completion so a crash
+    mid-setup re-triggers setup on the next Kodi boot.
 
     If firstrun_steps.txt exists, only the listed steps are shown.
-    The step counter (X/Y) is computed from the active steps so the
-    numbering is always correct regardless of which steps are skipped.
+    The step counter (X/Y) is computed from the active steps.
     """
 
     # ── Wait for Aeon Nox Silvo to finish building menu shortcuts ─────────
@@ -198,8 +219,6 @@ def run_first_time_setup(monitor):
             return
 
     # ── Wait for any addon auth prompts to clear ──────────────────────────
-    # Some addons (e.g. JellyCon on the Pro build) show a login dialog
-    # immediately on boot. We hold setup back until the screen is clear.
     AUTH_WAIT_CEILING = 600
     auth_wait_elapsed = 0
     while xbmc.getCondVisibility("System.HasModalDialog(true)"):
@@ -222,8 +241,10 @@ def run_first_time_setup(monitor):
     dialog = xbmcgui.Dialog()
 
     # ── Determine which steps are active for this build ───────────────────
-    ALL_STEPS = ['subtitles', 'device_name', 'weather', 'simkl',
-                 'iagl', 'iptv_sync', 'buffer']
+    # ALL_STEPS defines the canonical order — builds.json firstrun_steps
+    # lists which of these to include per build.
+    ALL_STEPS = ['subtitles', 'weather', 'device_name', 'simkl',
+                 'jellycon', 'iagl', 'iptv_sync', 'buffer']
 
     allowed = read_firstrun_steps()
     active  = [s for s in ALL_STEPS if allowed is None or s in allowed]
@@ -234,14 +255,13 @@ def run_first_time_setup(monitor):
 
     xbmc.log(f"[CutCableWizard] First Run active steps ({total}): {active}", xbmc.LOGINFO)
 
-    # ── Step: Device Name ─────────────────────────────────────────────────
-    if 'device_name' in active:
-        name = dialog.input(
-            f"Setup ({n('device_name')}/{total}): Device Name",
-            defaultt="Kodi-FireTV"
-        ).strip()
-        if name:
-            set_kodi_setting("services.devicename", name)
+    # ── Step: Subtitles ───────────────────────────────────────────────────
+    if 'subtitles' in active:
+        if dialog.yesno(
+            f"Setup ({n('subtitles')}/{total}): Subtitles",
+            "Enable automatic subtitles?"
+        ):
+            set_kodi_setting("subtitles.enabled", True)
 
     # ── Step: Weather ─────────────────────────────────────────────────────
     # Multi Weather uses a zip code or city name — no GPS lookup.
@@ -259,53 +279,70 @@ def run_first_time_setup(monitor):
             xbmc.executebuiltin("Addon.OpenSettings(weather.multi)")
             wait_for_settings_dialog(monitor)
 
-    # ── Step: Subtitles ───────────────────────────────────────────────────
-    if 'subtitles' in active:
-        if dialog.yesno(
-            f"Setup ({n('subtitles')}/{total}): Subtitles",
-            "Enable automatic subtitles?"
-        ):
-            set_kodi_setting("subtitles.enabled", True)
-
-    # ── Step: IPTV Guide Sync ─────────────────────────────────────────────
-    if 'iptv_sync' in active:
-        xbmc.executebuiltin("RunPlugin(plugin://plugin.program.iptv.merge/?mode=run)")
-        dp = xbmcgui.DialogProgress()
-        dp.create(
-            f"Setup ({n('iptv_sync')}/{total}): IPTV Guide Sync",
-            "Syncing Live TV Guide..."
+    # ── Step: Device Name ─────────────────────────────────────────────────
+    if 'device_name' in active:
+        dialog.ok(
+            f"Setup ({n('device_name')}/{total}): Device Name",
+            "Setting a unique device name helps identify this Kodi instance "
+            "on your network.\n\n"
+            "This is especially important if you plan to [B]cast media[/B] to "
+            "this device or if you have [B]multiple Kodi devices[/B] in your "
+            "home — each device should have its own name (e.g. Kodi-LivingRoom, "
+            "Kodi-Bedroom) so they can be told apart.\n\n"
+            "You will be prompted to enter a name on the next screen."
         )
-        total_time = 60
-        for i in range(total_time):
-            if monitor.waitForAbort(1) or dp.iscanceled():
-                break
-            percent   = int((i / float(total_time)) * 100)
-            remaining = total_time - i
-            dp.update(percent, f"Finalizing IPTV Guide setup...\nTime remaining: {remaining}s")
-        dp.close()
+        name = dialog.input(
+            f"Setup ({n('device_name')}/{total}): Device Name",
+            defaultt="Kodi-LivingRoom"
+        ).strip()
+        if name:
+            set_kodi_setting("services.devicename", name)
 
     # ── Step: Simkl ───────────────────────────────────────────────────────
-    # If the user declines, Simkl is disabled so it does not prompt on
-    # every startup. They can re-enable it later via Kodi addon settings.
+    # Enable the addon if accepted, disable if declined so it does not
+    # prompt on every Kodi launch.
     if 'simkl' in active:
-        if is_addon_installed("script.simkl"):
+        if is_addon_present("script.simkl"):
             step_label = f"Setup ({n('simkl')}/{total}): Simkl"
             if dialog.yesno(
                 step_label,
                 "Would you like to authorize your Simkl account?\n\n"
                 "Simkl tracks your watched movies, TV shows, and anime."
             ):
+                enable_addon("script.simkl")
+                xbmc.sleep(1000)
                 xbmc.executebuiltin("Addon.OpenSettings(script.simkl)")
                 wait_for_simkl_auth(monitor, step_label)
             else:
                 disable_addon("script.simkl")
-                xbmc.log("[CutCableWizard] Simkl declined by user — addon disabled.", xbmc.LOGINFO)
+                xbmc.log("[CutCableWizard] Simkl declined — addon disabled.", xbmc.LOGINFO)
         else:
-            xbmc.log("[CutCableWizard] script.simkl not installed – skipping Simkl step.", xbmc.LOGINFO)
+            xbmc.log("[CutCableWizard] script.simkl not found – skipping Simkl step.", xbmc.LOGINFO)
+
+    # ── Step: JellyCon ───────────────────────────────────────────────────
+    # Pro builds include JellyCon for Jellyfin server integration.
+    # The user needs their Jellyfin server URL and credentials ready.
+    if 'jellycon' in active:
+        if is_addon_present("plugin.video.jellycon"):
+            if dialog.yesno(
+                f"Setup ({n('jellycon')}/{total}): JellyCon",
+                "Would you like to connect to your Jellyfin server?\n\n"
+                "Have your Jellyfin server address and login credentials ready."
+            ):
+                dialog.ok(
+                    "JellyCon Setup",
+                    "The JellyCon settings will now open.\n\n"
+                    "Enter your [B]Jellyfin server address[/B] and sign in "
+                    "with your credentials, then close settings to continue."
+                )
+                xbmc.executebuiltin("Addon.OpenSettings(plugin.video.jellycon)")
+                wait_for_settings_dialog(monitor)
+        else:
+            xbmc.log("[CutCableWizard] plugin.video.jellycon not found – skipping JellyCon step.", xbmc.LOGINFO)
 
     # ── Step: IAGL Archive.org ────────────────────────────────────────────
     if 'iagl' in active:
-        if xbmc.getCondVisibility("System.HasAddon(plugin.program.iagl)"):
+        if is_addon_present("plugin.program.iagl"):
             if dialog.yesno(
                 f"Setup ({n('iagl')}/{total}): IAGL Gaming",
                 "Would you like to configure Archive.org for the IAGL Gaming addon?\n\n"
@@ -321,11 +358,31 @@ def run_first_time_setup(monitor):
                 xbmc.executebuiltin("Addon.OpenSettings(plugin.program.iagl)")
                 wait_for_settings_dialog(monitor)
         else:
-            xbmc.log("[CutCableWizard] plugin.program.iagl not installed – skipping IAGL step.", xbmc.LOGINFO)
+            xbmc.log("[CutCableWizard] plugin.program.iagl not found – skipping IAGL step.", xbmc.LOGINFO)
+
+    # ── Step: IPTV Guide Sync ─────────────────────────────────────────────
+    # Enable the addon first in case it was disabled, then trigger the merge.
+    if 'iptv_sync' in active:
+        enable_addon("plugin.program.iptv.merge")
+        xbmc.sleep(1000)
+        xbmc.executebuiltin("RunPlugin(plugin://plugin.program.iptv.merge/?mode=run)")
+        dp = xbmcgui.DialogProgress()
+        dp.create(
+            f"Setup ({n('iptv_sync')}/{total}): IPTV Guide Sync",
+            "Syncing Live TV Guide..."
+        )
+        total_time = 60
+        for i in range(total_time):
+            if monitor.waitForAbort(1) or dp.iscanceled():
+                break
+            percent   = int((i / float(total_time)) * 100)
+            remaining = total_time - i
+            dp.update(percent, f"Finalizing IPTV Guide setup...\nTime remaining: {remaining}s")
+        dp.close()
 
     # ── Step: EZ Maintenance+ Buffer Optimization ─────────────────────────
     if 'buffer' in active:
-        if xbmc.getCondVisibility("System.HasAddon(script.ezmaintenanceplus)"):
+        if is_addon_present("script.ezmaintenanceplus"):
             if dialog.yesno(
                 f"Setup ({n('buffer')}/{total}): Buffer Optimization",
                 "Would you like to optimize the buffer size for this device?\n\n"
@@ -346,7 +403,7 @@ def run_first_time_setup(monitor):
                     if monitor.waitForAbort(1):
                         break
         else:
-            xbmc.log("[CutCableWizard] script.ezmaintenanceplus not installed – skipping buffer step.", xbmc.LOGINFO)
+            xbmc.log("[CutCableWizard] script.ezmaintenanceplus not found – skipping buffer step.", xbmc.LOGINFO)
 
     # ── Cleanup & finish ──────────────────────────────────────────────────
     for trigger in [FIRSTRUN_FILE, FIRSTRUN_STEPS_FILE]:

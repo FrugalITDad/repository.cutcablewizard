@@ -19,7 +19,7 @@ BUILD_NAMES = {
     'cordcutter_pro_gaming':   'CordCutter Pro w Gaming',
 }
 
-# Internal build IDs that are never shown in the install menu
+# Internal build IDs never shown in the install menu
 HIDDEN_BUILD_IDS = {'cordcutter_fresh_start'}
 
 
@@ -97,13 +97,8 @@ def wipe_kodi():
 
 def smart_fresh_start(manifest):
     """
-    Full fresh start flow:
-      1. Confirm with the user
-      2. Find the clean slate build URL in the manifest
-      3. Download and verify the zip (existing setup untouched until here)
-      4. Wipe everything
-      5. Extract the clean slate zip
-      6. Return True so main_menu() can force-close Kodi
+    Full fresh start: confirm → download clean slate → verify → wipe → extract.
+    Returns True on success so main_menu() can force-close Kodi.
     """
     if not xbmcgui.Dialog().yesno(
         "Fresh Start",
@@ -303,6 +298,67 @@ def install_build(url, name, version, build_id, firstrun_steps=None):
 
 
 # ---------------------------------------------------------------------------
+# Re-run First Run Setup
+# ---------------------------------------------------------------------------
+def trigger_first_run_setup(manifest):
+    """
+    Writes firstrun.txt and firstrun_steps.txt for the currently installed
+    build, then force-closes Kodi so the service picks up setup on next boot.
+    """
+    build_id, version = get_installed_info()
+    if not build_id:
+        xbmcgui.Dialog().ok(
+            "First Run Setup",
+            "No build is currently installed.\n\n"
+            "Please install a build first before running setup."
+        )
+        return
+
+    # Look up the firstrun_steps for this build from the manifest
+    firstrun_steps = None
+    if manifest:
+        builds        = manifest.get('builds', [])
+        current_build = next((b for b in builds if b['id'] == build_id), None)
+        if current_build:
+            firstrun_steps = current_build.get('firstrun_steps')
+
+    build_name = BUILD_NAMES.get(build_id, build_id)
+    if not xbmcgui.Dialog().yesno(
+        "Re-run First Run Setup",
+        f"This will restart Kodi and run the First Run Setup wizard for "
+        f"[B]{build_name}[/B].\n\n"
+        "Any settings previously configured during setup can be updated.\n\n"
+        "Are you sure you want to continue?"
+    ):
+        return
+
+    # Write trigger files
+    try:
+        with open(os.path.join(HOME, 'firstrun.txt'), 'w') as f:
+            f.write("pending")
+        if firstrun_steps:
+            with open(FIRSTRUN_STEPS_FILE, 'w') as f:
+                f.write(','.join(firstrun_steps))
+        elif os.path.exists(FIRSTRUN_STEPS_FILE):
+            # No steps defined — remove any stale steps file so all steps run
+            os.remove(FIRSTRUN_STEPS_FILE)
+    except Exception as e:
+        xbmcgui.Dialog().ok(
+            "Error",
+            f"Could not write setup trigger files:\n\n{str(e)}"
+        )
+        return
+
+    xbmcgui.Dialog().ok(
+        "First Run Setup Scheduled",
+        "Setup has been scheduled.\n\n"
+        "Kodi will now close. After you reopen it, please wait approximately "
+        "45 seconds for the First Run Setup wizard to appear."
+    )
+    os._exit(1)
+
+
+# ---------------------------------------------------------------------------
 # Update Check
 # ---------------------------------------------------------------------------
 def check_for_updates(manifest):
@@ -345,7 +401,8 @@ def check_for_updates(manifest):
 # ---------------------------------------------------------------------------
 def main_menu():
     manifest = get_json(MANIFEST_URL)
-    choice   = xbmcgui.Dialog().select("CutCable Wizard", ["Install Build", "Fresh Start"])
+    options  = ["Install Build", "Fresh Start", "First Run Setup"]
+    choice   = xbmcgui.Dialog().select("CutCable Wizard", options)
 
     # ── Install Build ──────────────────────────────────────────────────────
     if choice == 0:
@@ -357,7 +414,6 @@ def main_menu():
             )
             return
 
-        # Filter out internal builds (fresh start, any future admin builds)
         builds = [b for b in manifest.get('builds', [])
                   if b['id'] not in HIDDEN_BUILD_IDS
                   and not b.get('admin_only', False)]
@@ -393,6 +449,10 @@ def main_menu():
                 "Kodi will now close. Reopen it when you are ready to install a build."
             )
             os._exit(1)
+
+    # ── First Run Setup ────────────────────────────────────────────────────
+    elif choice == 2:
+        trigger_first_run_setup(manifest)
 
     # ── Post-menu update check ────────────────────────────────────────────
     check_for_updates(manifest)

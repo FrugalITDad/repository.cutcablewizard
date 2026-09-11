@@ -8,7 +8,8 @@
       "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/1.1.1/cordcutter_base-build-1.1.1.zip",
       "size_mb": 291,
       "changelog": "Standard release with verified legal streaming sources and automatic guide sync.",
-      "admin_only": false
+      "admin_only": false,
+      "firstrun_steps": ["subtitles", "weather", "device_name", "iptv_sync", "buffer"]
     },
     {
       "id": "cordcutter_plus",
@@ -18,7 +19,8 @@
       "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/1.1.0/cordcutter_plus-build-1.1.0.zip",
       "size_mb": 234,
       "changelog": "Plus release including 3rd party addons for expanded categories.",
-      "admin_only": false
+      "admin_only": false,
+      "firstrun_steps": ["subtitles", "weather", "device_name", "simkl", "iptv_sync", "buffer"]
     },
     {
       "id": "cordcutter_plus_gaming",
@@ -28,7 +30,8 @@
       "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/1.1.0/cordcutter_plus_gaming-build-1.1.0.zip",
       "size_mb": 349,
       "changelog": "Plus Gaming release adding IAGL retro gaming integration via Archive.org.",
-      "admin_only": false
+      "admin_only": false,
+      "firstrun_steps": ["subtitles", "weather", "device_name", "simkl", "iagl", "iptv_sync", "buffer"]
     },
     {
       "id": "cordcutter_pro",
@@ -38,7 +41,8 @@
       "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/1.1.0/cordcutter_pro-build-1.1.0.zip",
       "size_mb": 241,
       "changelog": "Pro release adding Jellyfin integration via JellyCon.",
-      "admin_only": false
+      "admin_only": false,
+      "firstrun_steps": ["subtitles", "weather", "device_name", "simkl", "jellycon", "iptv_sync", "buffer"]
     },
     {
       "id": "cordcutter_pro_gaming",
@@ -48,7 +52,8 @@
       "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/1.1.0/cordcutter_pro_gaming-build-1.1.0.zip",
       "size_mb": 354,
       "changelog": "Pro Gaming release adding IAGL retro gaming integration via Archive.org.",
-      "admin_only": false
+      "admin_only": false,
+      "firstrun_steps": ["subtitles", "weather", "device_name", "simkl", "jellycon", "iagl", "iptv_sync", "buffer"]
     },
     {
       "id": "cordcutter_fresh_start",
