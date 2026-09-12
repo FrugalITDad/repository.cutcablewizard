@@ -17,7 +17,7 @@
       "description": "Base Build with 3rd Party Addons for music, sports, kids, movies, tv and premium live tv.",
       "version": "1.1.0",
       "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/1.1.1/cordcutter_plus-build-1.1.0.zip",
-      "size_mb": 234,
+      "size_mb": 337,
       "changelog": "Plus release including 3rd party addons for expanded categories.",
       "admin_only": false,
       "firstrun_steps": ["subtitles", "weather", "device_name", "simkl", "iptv_sync", "buffer"]
