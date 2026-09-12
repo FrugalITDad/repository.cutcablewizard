@@ -364,6 +364,8 @@ def run_first_time_setup(monitor):
                 "Would you like to connect to your Jellyfin server?\n\n"
                 "Have your Jellyfin server address and login credentials ready."
             ):
+                enable_addon("plugin.video.jellycon")
+                xbmc.sleep(1000)
                 dialog.ok(
                     "JellyCon Setup",
                     "The JellyCon settings will now open.\n\n"
