@@ -1,6 +1,18 @@
+# CutCableWizard language file
+# Addon Name: CutCableWizard
+# Addon id: plugin.program.cutcablewizard
+# Addon Provider: FrugalITDad
 msgid ""
 msgstr ""
-"Project-Id-Version: CutCableWizard 1.0.0\n"
-"Language: en_US\n"
-"Content-Type: text/plain; charset=UTF-8\n"
-"Content-Transfer-Encoding: 8bit\n"
+
+msgctxt "#32100"
+msgid "Admin"
+msgstr ""
+
+msgctxt "#32101"
+msgid "Build URL"
+msgstr ""
+
+msgctxt "#32102"
+msgid "Access Token"
+msgstr ""
