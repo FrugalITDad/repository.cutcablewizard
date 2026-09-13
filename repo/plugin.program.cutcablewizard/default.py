@@ -10,7 +10,6 @@ HOME     = xbmcvfs.translatePath("special://home/")
 MANIFEST_URL        = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
 FIRSTRUN_STEPS_FILE = os.path.join(HOME, 'firstrun_steps.txt')
 
-# Human-readable names for the switch-build warning dialog.
 BUILD_NAMES = {
     'cordcutter_base':         'CordCutter Base',
     'cordcutter_plus':         'CordCutter Plus',
@@ -20,7 +19,6 @@ BUILD_NAMES = {
     'cordcutter_admin':        'CordCutter Admin',
 }
 
-# Internal build IDs never shown in the install menu
 HIDDEN_BUILD_IDS = {'cordcutter_fresh_start'}
 
 
@@ -47,11 +45,6 @@ def set_kodi_setting(setting, value):
 
 
 def get_installed_info():
-    """
-    Returns (build_id, version) tuple from installed_version.txt.
-    File format: build_id|version  e.g. cordcutter_plus|1.1.0
-    Returns (None, None) when no build is installed.
-    """
     path = os.path.join(HOME, 'installed_version.txt')
     if not os.path.exists(path):
         return None, None
@@ -67,12 +60,6 @@ def get_installed_info():
 
 
 def load_admin_settings():
-    """
-    Reads admin build URL and access token from local addon settings.
-    Returns (url, token) if both are configured, otherwise (None, None).
-    These values are stored only on this device in the addon's settings.xml
-    and never appear in any public file.
-    """
     url   = ADDON.getSetting('admin_build_url').strip()
     token = ADDON.getSetting('admin_token').strip()
     if url and token:
@@ -87,11 +74,6 @@ FRESH_START_BUILD_ID = 'cordcutter_fresh_start'
 
 
 def wipe_kodi():
-    """
-    Core wipe routine shared by smart_fresh_start() and install_build().
-    Deletes all Kodi folders and HOME root trigger files completely.
-    The caller is responsible for extracting a zip immediately after.
-    """
     for folder in ['addons', 'userdata', 'packages', 'temp', 'Database']:
         path = os.path.join(HOME, folder)
         if os.path.exists(path):
@@ -99,7 +81,6 @@ def wipe_kodi():
                 shutil.rmtree(path, ignore_errors=True)
             except Exception:
                 pass
-
     for trigger in ['firstrun.txt', 'firstrun_steps.txt', 'installed_version.txt',
                     'last_update_check.txt', 'post_fresh_start.txt']:
         path = os.path.join(HOME, trigger)
@@ -111,10 +92,6 @@ def wipe_kodi():
 
 
 def smart_fresh_start(manifest):
-    """
-    Full fresh start: confirm → download clean slate → verify → wipe → extract.
-    Returns True on success so main_menu() can force-close Kodi.
-    """
     if not xbmcgui.Dialog().yesno(
         "Fresh Start",
         "This will completely wipe your Kodi installation and restore a "
@@ -208,17 +185,8 @@ def smart_fresh_start(manifest):
 # ---------------------------------------------------------------------------
 def install_build(url, name, version, build_id,
                   firstrun_steps=None, extra_headers=None):
-    """
-    Downloads, verifies, and installs a build zip.
-
-    firstrun_steps — optional list of step names written to firstrun_steps.txt
-                     so service.py only runs those steps. None = all steps.
-    extra_headers  — optional dict of HTTP headers for the download request,
-                     used to pass an Authorization token for private builds.
-    """
     zip_path = os.path.join(HOME, "build.zip")
 
-    # ── Build switch warning ───────────────────────────────────────────────
     installed_id, installed_version = get_installed_info()
     if installed_id and installed_id != build_id:
         installed_name = BUILD_NAMES.get(installed_id, installed_id)
@@ -235,7 +203,6 @@ def install_build(url, name, version, build_id,
     dp.create("CordCutter Wizard", f"Downloading {name}...")
 
     try:
-        # ── 1. Download ───────────────────────────────────────────────────
         context = ssl._create_unverified_context()
         headers = {'User-Agent': 'Kodi-Wizard'}
         if extra_headers:
@@ -258,18 +225,15 @@ def install_build(url, name, version, build_id,
                     dp.close()
                     return
 
-        # ── 2. Verify ─────────────────────────────────────────────────────
         dp.update(0, "Verifying download...")
         with zipfile.ZipFile(zip_path, 'r') as zf:
             bad_file = zf.testzip()
         if bad_file:
             raise zipfile.BadZipFile(f"Corrupt file in zip: {bad_file}")
 
-        # ── 3. Wipe ───────────────────────────────────────────────────────
         dp.update(0, "Preparing for installation...")
         wipe_kodi()
 
-        # ── 4. Extract ────────────────────────────────────────────────────
         dp.update(0, "Extracting build files...")
         with zipfile.ZipFile(zip_path, "r") as zf:
             files       = zf.infolist()
@@ -282,7 +246,6 @@ def install_build(url, name, version, build_id,
                     )
                 zf.extract(zipped_file, HOME)
 
-        # ── 5. Write trigger files ────────────────────────────────────────
         with open(os.path.join(HOME, 'installed_version.txt'), 'w') as f:
             f.write(f"{build_id}|{version}")
 
@@ -297,7 +260,6 @@ def install_build(url, name, version, build_id,
         if os.path.exists(zip_path):
             os.remove(zip_path)
 
-        # ── 6. Inform user then force-close ───────────────────────────────
         xbmcgui.Dialog().ok(
             "Install Complete",
             f"[B]{name} v{version}[/B] has been applied!\n\n"
@@ -322,10 +284,6 @@ def install_build(url, name, version, build_id,
 # Re-run First Run Setup
 # ---------------------------------------------------------------------------
 def trigger_first_run_setup(manifest):
-    """
-    Writes firstrun.txt and firstrun_steps.txt for the currently installed
-    build, then force-closes Kodi so the service picks up setup on next boot.
-    """
     build_id, version = get_installed_info()
     if not build_id:
         xbmcgui.Dialog().ok(
@@ -342,7 +300,6 @@ def trigger_first_run_setup(manifest):
         if current_build:
             firstrun_steps = current_build.get('firstrun_steps')
 
-    # Admin build steps are not in builds.json — use the fixed set
     if build_id == 'cordcutter_admin' and not firstrun_steps:
         firstrun_steps = ['device_name', 'iptv_sync', 'buffer']
 
@@ -356,8 +313,6 @@ def trigger_first_run_setup(manifest):
     ):
         return
 
-    # Disable addons that auto-launch on boot so they don't create pop-up
-    # windows before First Run Setup starts on the next boot.
     for addon_id in ['script.simkl', 'plugin.program.iptv.merge']:
         xbmc.executeJSONRPC(json.dumps({
             "jsonrpc": "2.0",
@@ -376,10 +331,7 @@ def trigger_first_run_setup(manifest):
         elif os.path.exists(FIRSTRUN_STEPS_FILE):
             os.remove(FIRSTRUN_STEPS_FILE)
     except Exception as e:
-        xbmcgui.Dialog().ok(
-            "Error",
-            f"Could not write setup trigger files:\n\n{str(e)}"
-        )
+        xbmcgui.Dialog().ok("Error", f"Could not write setup trigger files:\n\n{str(e)}")
         return
 
     xbmcgui.Dialog().ok(
@@ -392,14 +344,52 @@ def trigger_first_run_setup(manifest):
 
 
 # ---------------------------------------------------------------------------
+# Admin Settings
+# ---------------------------------------------------------------------------
+def configure_admin_settings():
+    """
+    Prompts for admin build URL and access token using input dialogs.
+    Values are stored via ADDON.setSetting() in the addon local data folder.
+    """
+    current_url   = ADDON.getSetting('admin_build_url').strip()
+    current_token = ADDON.getSetting('admin_token').strip()
+
+    status_url   = current_url if current_url else "Not set"
+    status_token = "Configured" if current_token else "Not set"
+
+    if not xbmcgui.Dialog().yesno(
+        "Admin Settings",
+        f"Build URL: [B]{status_url}[/B]\n"
+        f"Access Token: [B]{status_token}[/B]\n\n"
+        "Would you like to update these settings?"
+    ):
+        return
+
+    url = xbmcgui.Dialog().input("Admin Build URL", defaultt=current_url)
+    if url is None:
+        return
+    ADDON.setSetting('admin_build_url', url.strip())
+
+    token = xbmcgui.Dialog().input("Access Token", defaultt=current_token)
+    if token is None:
+        return
+    ADDON.setSetting('admin_token', token.strip())
+
+    if url.strip() and token.strip():
+        msg = ("Your admin settings have been saved to this device.\n\n"
+               "The Admin build will now appear in the Install Build menu.")
+    else:
+        msg = ("Settings saved.\n\n"
+               "Note: both URL and Token must be set for the "
+               "Admin build to appear in the menu.")
+
+    xbmcgui.Dialog().ok("Admin Settings Saved", msg)
+
+
+# ---------------------------------------------------------------------------
 # Update Check
 # ---------------------------------------------------------------------------
 def check_for_updates(manifest):
-    """
-    Compares the installed build version against the manifest.
-    Prompts the user to update if a newer version is available.
-    Admin build is skipped since it is not in the public manifest.
-    """
     if not manifest:
         return
 
@@ -407,7 +397,6 @@ def check_for_updates(manifest):
     if not build_id or not installed_version:
         return
 
-    # Admin build updates are managed manually — skip the check
     if build_id == 'cordcutter_admin':
         return
 
@@ -435,86 +424,26 @@ def check_for_updates(manifest):
 
 
 # ---------------------------------------------------------------------------
-# Admin Settings
-# ---------------------------------------------------------------------------
-def configure_admin_settings():
-    """
-    Prompts for admin build URL and access token using input dialogs.
-    Stores both values via ADDON.setSetting() in the addon's local data
-    folder — works independently of the settings.xml UI.
-    Showing current values (masked for token) lets you confirm what is set.
-    """
-    current_url   = ADDON.getSetting('admin_build_url').strip()
-    current_token = ADDON.getSetting('admin_token').strip()
-
-    # Show current state so it's clear what is already configured
-    status_url   = current_url if current_url else "Not set"
-    status_token = "Configured" if current_token else "Not set"
-
-    if not xbmcgui.Dialog().yesno(
-        "Admin Settings",
-        f"Current Build URL: [B]{status_url}[/B]
-"
-        f"Current Access Token: [B]{status_token}[/B]
-
-"
-        "Would you like to update these settings?"
-    ):
-        return
-
-    url = xbmcgui.Dialog().input(
-        "Admin Build URL",
-        defaultt=current_url
-    )
-    if url is None:
-        return
-    ADDON.setSetting('admin_build_url', url.strip())
-
-    token = xbmcgui.Dialog().input(
-        "Access Token",
-        defaultt=current_token
-    )
-    if token is None:
-        return
-    ADDON.setSetting('admin_token', token.strip())
-
-    xbmcgui.Dialog().ok(
-        "Admin Settings Saved",
-        "Your admin settings have been saved to this device.
-
-"
-        "The Admin build will now appear in the Install Build menu."
-        if url.strip() and token.strip() else
-        "Settings saved. Note: both URL and Token must be set for the "
-        "Admin build to appear in the menu."
-    )
-
-
-# ---------------------------------------------------------------------------
 # Main Menu
 # ---------------------------------------------------------------------------
 def main_menu():
     manifest = get_json(MANIFEST_URL)
 
-    # ── Check for admin build in local addon settings ──────────────────────
-    # The URL and token are stored only on this device — never in any public
-    # file. The admin build only appears in the menu when both are configured.
     admin_url, admin_token = load_admin_settings()
     admin_build = None
     if admin_url:
         admin_build = {
-            'id':            'cordcutter_admin',
-            'name':          'CordCutter Admin',
-            'description':   'Personal admin build with pre-configured accounts.',
-            'version':       '1.0',
-            'size_mb':       0,
+            'id':             'cordcutter_admin',
+            'name':           'CordCutter Admin',
+            'description':    'Personal admin build with pre-configured accounts.',
+            'version':        '1.0',
+            'size_mb':        0,
             'firstrun_steps': ['device_name', 'iptv_sync', 'buffer'],
         }
 
     options = ["Install Build", "Fresh Start", "First Run Setup", "Admin Settings"]
     choice  = xbmcgui.Dialog().select("CutCable Wizard", options)
 
-    # ── Install Build ──────────────────────────────────────────────────────
     if choice == 0:
         if not manifest and not admin_build:
             xbmcgui.Dialog().ok(
@@ -530,7 +459,6 @@ def main_menu():
                       if b['id'] not in HIDDEN_BUILD_IDS
                       and not b.get('admin_only', False)]
 
-        # Append admin build at the end if configured on this device
         if admin_build:
             builds.append(admin_build)
 
@@ -558,7 +486,6 @@ def main_menu():
                                  if is_admin_build else None
             )
 
-    # ── Fresh Start ────────────────────────────────────────────────────────
     elif choice == 1:
         if smart_fresh_start(manifest):
             xbmcgui.Dialog().ok(
@@ -569,15 +496,12 @@ def main_menu():
             )
             os._exit(1)
 
-    # ── First Run Setup ────────────────────────────────────────────────────
     elif choice == 2:
         trigger_first_run_setup(manifest)
 
-    # ── Admin Settings ─────────────────────────────────────────────────────
     elif choice == 3:
         configure_admin_settings()
 
-    # ── Post-menu update check ────────────────────────────────────────────
     check_for_updates(manifest)
 
 
