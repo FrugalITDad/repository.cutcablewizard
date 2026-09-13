@@ -1,4 +1,4 @@
-import xbmc, xbmcgui, xbmcaddon, os, shutil, urllib.request, json, ssl, zipfile, xbmcvfs
+import xbmc, xbmcgui, xbmcaddon, os, shutil, urllib.request, json, ssl, zipfile, xbmcvfs, re
 
 # ---------------------------------------------------------------------------
 # Addon Constants
@@ -59,6 +59,61 @@ def get_installed_info():
         return None, data.strip()
     except Exception:
         return None, None
+
+
+def github_api_request(api_url, token):
+    """Makes an authenticated request to the GitHub API and returns parsed JSON."""
+    context = ssl._create_unverified_context()
+    headers = {
+        'Authorization':        f'Bearer {token}',
+        'Accept':               'application/vnd.github+json',
+        'User-Agent':           'Kodi-Wizard',
+        'X-GitHub-Api-Version': '2022-11-28'
+    }
+    req = urllib.request.Request(api_url, headers=headers)
+    with urllib.request.urlopen(req, context=context, timeout=15) as r:
+        return json.loads(r.read().decode('utf-8'))
+
+
+def resolve_github_release_url(url, token):
+    """
+    For private GitHub release download URLs, resolves the direct API download
+    URL for the asset. GitHub private release assets cannot be downloaded via
+    the browser URL with a token — they must go through the API.
+
+    Parses: https://github.com/OWNER/REPO/releases/download/TAG/FILENAME
+    Returns: (api_asset_url, headers) or raises an exception on failure.
+    """
+    m = re.match(
+        r'https://github\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/(.+)',
+        url
+    )
+    if not m:
+        return url, {'Authorization': f'Bearer {token}', 'User-Agent': 'Kodi-Wizard',
+                     'Accept': 'application/octet-stream'}
+
+    owner, repo, tag, filename = m.groups()
+    xbmc.log(f"[CutCableWizard] Resolving GitHub release asset: {owner}/{repo}@{tag}/{filename}", xbmc.LOGINFO)
+
+    api_url      = f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}"
+    release_data = github_api_request(api_url, token)
+
+    assets = release_data.get('assets', [])
+    asset  = next((a for a in assets if a['name'] == filename), None)
+    if not asset:
+        asset_names = [a['name'] for a in assets]
+        raise Exception(f"Asset '{filename}' not found in release '{tag}'.\n\n"
+                        f"Available assets: {asset_names}")
+
+    asset_api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/assets/{asset['id']}"
+    dl_headers    = {
+        'Authorization':        f'Bearer {token}',
+        'Accept':               'application/octet-stream',
+        'User-Agent':           'Kodi-Wizard',
+        'X-GitHub-Api-Version': '2022-11-28'
+    }
+    xbmc.log(f"[CutCableWizard] Resolved asset ID {asset['id']} — downloading via API.", xbmc.LOGINFO)
+    return asset_api_url, dl_headers
 
 
 def load_admin_settings():
@@ -231,11 +286,43 @@ def install_build(url, name, version, build_id,
 
     try:
         context = ssl._create_unverified_context()
-        headers = {'User-Agent': 'Kodi-Wizard'}
+        headers = {'User-Agent': 'Kodi-Wizard', 'Accept': 'application/octet-stream'}
         if extra_headers:
             headers.update(extra_headers)
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, context=context) as r, open(zip_path, 'wb') as f:
+
+        # Private GitHub release assets must be downloaded via the API rather
+        # than the browser download URL — resolve to the API endpoint first.
+        download_url = url
+        bearer_token = (extra_headers or {}).get('Authorization', '').replace('Bearer ', '')
+        if bearer_token and 'github.com' in url and '/releases/download/' in url:
+            try:
+                download_url, headers = resolve_github_release_url(url, bearer_token)
+            except Exception as resolve_err:
+                dp.close()
+                xbmcgui.Dialog().ok(
+                    "Download Error",
+                    f"Could not locate the admin build asset.\n\n{str(resolve_err)}"
+                )
+                return
+
+        xbmc.log(f"[CutCableWizard] Downloading: {download_url[:80]}", xbmc.LOGINFO)
+        try:
+            req = urllib.request.Request(download_url, headers=headers)
+            r   = urllib.request.urlopen(req, context=context)
+        except urllib.error.HTTPError as http_err:
+            dp.close()
+            xbmc.log(f"[CutCableWizard] Download HTTP {http_err.code}: {url}", xbmc.LOGWARNING)
+            xbmcgui.Dialog().ok(
+                "Download Error",
+                f"Could not download [B]{name}[/B].\n\n"
+                f"HTTP Error {http_err.code}: {http_err.reason}\n\n"
+                "For the Admin build verify:\n"
+                "  - The Build URL is correct\n"
+                "  - The Access Token has [B]Contents: Read[/B] permission\n"
+                "  - The token has not expired"
+            )
+            return
+        with r, open(zip_path, 'wb') as f:
             total = int(r.info().get('Content-Length', 0))
             count = 0
             while True:
@@ -516,7 +603,7 @@ def main_menu():
                 version        = selected['version'],
                 build_id       = selected['id'],
                 firstrun_steps = selected.get('firstrun_steps'),
-                extra_headers  = {'Authorization': f'token {admin_token}'}
+                extra_headers  = {'Authorization': f'Bearer {admin_token}'}
                                  if is_admin_build else None
             )
 
