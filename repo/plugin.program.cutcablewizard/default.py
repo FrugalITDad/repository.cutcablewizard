@@ -435,6 +435,62 @@ def check_for_updates(manifest):
 
 
 # ---------------------------------------------------------------------------
+# Admin Settings
+# ---------------------------------------------------------------------------
+def configure_admin_settings():
+    """
+    Prompts for admin build URL and access token using input dialogs.
+    Stores both values via ADDON.setSetting() in the addon's local data
+    folder — works independently of the settings.xml UI.
+    Showing current values (masked for token) lets you confirm what is set.
+    """
+    current_url   = ADDON.getSetting('admin_build_url').strip()
+    current_token = ADDON.getSetting('admin_token').strip()
+
+    # Show current state so it's clear what is already configured
+    status_url   = current_url if current_url else "Not set"
+    status_token = "Configured" if current_token else "Not set"
+
+    if not xbmcgui.Dialog().yesno(
+        "Admin Settings",
+        f"Current Build URL: [B]{status_url}[/B]
+"
+        f"Current Access Token: [B]{status_token}[/B]
+
+"
+        "Would you like to update these settings?"
+    ):
+        return
+
+    url = xbmcgui.Dialog().input(
+        "Admin Build URL",
+        defaultt=current_url
+    )
+    if url is None:
+        return
+    ADDON.setSetting('admin_build_url', url.strip())
+
+    token = xbmcgui.Dialog().input(
+        "Access Token",
+        defaultt=current_token
+    )
+    if token is None:
+        return
+    ADDON.setSetting('admin_token', token.strip())
+
+    xbmcgui.Dialog().ok(
+        "Admin Settings Saved",
+        "Your admin settings have been saved to this device.
+
+"
+        "The Admin build will now appear in the Install Build menu."
+        if url.strip() and token.strip() else
+        "Settings saved. Note: both URL and Token must be set for the "
+        "Admin build to appear in the menu."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main Menu
 # ---------------------------------------------------------------------------
 def main_menu():
@@ -455,7 +511,7 @@ def main_menu():
             'firstrun_steps': ['device_name', 'iptv_sync', 'buffer'],
         }
 
-    options = ["Install Build", "Fresh Start", "First Run Setup"]
+    options = ["Install Build", "Fresh Start", "First Run Setup", "Admin Settings"]
     choice  = xbmcgui.Dialog().select("CutCable Wizard", options)
 
     # ── Install Build ──────────────────────────────────────────────────────
@@ -516,6 +572,10 @@ def main_menu():
     # ── First Run Setup ────────────────────────────────────────────────────
     elif choice == 2:
         trigger_first_run_setup(manifest)
+
+    # ── Admin Settings ─────────────────────────────────────────────────────
+    elif choice == 3:
+        configure_admin_settings()
 
     # ── Post-menu update check ────────────────────────────────────────────
     check_for_updates(manifest)
