@@ -8,6 +8,8 @@ ADDON_ID = ADDON.getAddonInfo('id')
 HOME     = xbmcvfs.translatePath("special://home/")
 
 MANIFEST_URL        = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
+ADDON_PROFILE       = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
+ADMIN_CONFIG_FILE   = os.path.join(ADDON_PROFILE, 'admin_config.json')
 FIRSTRUN_STEPS_FILE = os.path.join(HOME, 'firstrun_steps.txt')
 
 BUILD_NAMES = {
@@ -60,11 +62,36 @@ def get_installed_info():
 
 
 def load_admin_settings():
-    url   = ADDON.getSetting('admin_build_url').strip()
-    token = ADDON.getSetting('admin_token').strip()
-    if url and token:
-        return url, token
+    """
+    Reads admin credentials from admin_config.json in the addon profile folder.
+    This file is stored locally on the device and never in any public location.
+    Returns (url, token) if both are set, otherwise (None, None).
+    """
+    if not os.path.exists(ADMIN_CONFIG_FILE):
+        return None, None
+    try:
+        with open(ADMIN_CONFIG_FILE, 'r') as f:
+            data = json.load(f)
+        url   = data.get('admin_build_url', '').strip()
+        token = data.get('admin_token', '').strip()
+        if url and token:
+            return url, token
+    except Exception:
+        pass
     return None, None
+
+
+def save_admin_settings(url, token):
+    """Writes admin credentials to admin_config.json in the addon profile folder."""
+    try:
+        if not os.path.exists(ADDON_PROFILE):
+            os.makedirs(ADDON_PROFILE, exist_ok=True)
+        with open(ADMIN_CONFIG_FILE, 'w') as f:
+            json.dump({'admin_build_url': url, 'admin_token': token}, f)
+        return True
+    except Exception as e:
+        xbmc.log(f"[CutCableWizard] Failed to save admin settings: {e}", xbmc.LOGWARNING)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -351,8 +378,9 @@ def configure_admin_settings():
     Prompts for admin build URL and access token using input dialogs.
     Values are stored via ADDON.setSetting() in the addon local data folder.
     """
-    current_url   = ADDON.getSetting('admin_build_url').strip()
-    current_token = ADDON.getSetting('admin_token').strip()
+    current_url, current_token = load_admin_settings()
+    current_url   = current_url or ''
+    current_token = current_token or ''  
 
     status_url   = current_url if current_url else "Not set"
     status_token = "Configured" if current_token else "Not set"
@@ -368,12 +396,18 @@ def configure_admin_settings():
     url = xbmcgui.Dialog().input("Admin Build URL", defaultt=current_url)
     if url is None:
         return
-    ADDON.setSetting('admin_build_url', url.strip())
 
     token = xbmcgui.Dialog().input("Access Token", defaultt=current_token)
     if token is None:
         return
-    ADDON.setSetting('admin_token', token.strip())
+
+    if not save_admin_settings(url.strip(), token.strip()):
+        xbmcgui.Dialog().ok(
+            "Admin Settings Error",
+            "Could not save settings to disk.\n\n"
+            "Please check that the addon data folder is writable."
+        )
+        return
 
     if url.strip() and token.strip():
         msg = ("Your admin settings have been saved to this device.\n\n"
