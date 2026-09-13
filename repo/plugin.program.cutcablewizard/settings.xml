@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<settings>
+    <category label="Admin">
+        <setting label="Build URL" type="text" id="admin_build_url" default="" />
+        <setting label="Access Token" type="text" id="admin_token" default="" />
+    </category>
+</settings>
