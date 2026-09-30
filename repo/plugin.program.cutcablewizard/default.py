@@ -138,7 +138,8 @@ def wipe_kodi():
                 pass
     for trigger in ['firstrun.txt', 'firstrun_steps.txt', 'installed_version.txt',
                     'last_update_check.txt', 'post_fresh_start.txt',
-                    'firstrun_completed.json', 'post_update.json']:
+                    'firstrun_completed.json', 'post_update.json',
+                    'update_snooze.json']:
         path = os.path.join(HOME, trigger)
         try:
             if os.path.exists(path):
@@ -559,14 +560,20 @@ def check_for_updates(manifest, ask=True):
         return
 
     build, installed_version, extra_headers = found
-    if ask and not xbmcgui.Dialog().yesno(
-        "Update Available",
-        f"A new version of [B]{build['name']}[/B] is available!\n\n"
-        f"  Installed : v{installed_version}\n"
-        f"  Available : v{build['version']}\n\n"
-        "Would you like to update now?"
-    ):
-        return
+    if ask:
+        # Respect "remind me later" for the automatic prompt; the menu heading
+        # still shows the update and Install Build still offers it.
+        if updates.is_snoozed(build['id'], build['version']):
+            return
+        if not xbmcgui.Dialog().yesno(
+            "Update Available",
+            f"A new version of [B]{build['name']}[/B] is available!\n\n"
+            f"  Installed : v{installed_version}\n"
+            f"  Available : v{build['version']}\n\n"
+            "Would you like to update now?"
+        ):
+            updates.ask_snooze(build['id'], build['version'])
+            return
 
     install_build(
         url            = build['download_url'],
@@ -581,6 +588,35 @@ def check_for_updates(manifest, ask=True):
 # ---------------------------------------------------------------------------
 # Main Menu
 # ---------------------------------------------------------------------------
+def installed_build_status(manifest, admin_build=None):
+    """
+    One-line status for the main menu heading, e.g.
+      Installed: CordCutter Plus v1.2.0
+      Installed: CordCutter Plus v1.1.0  (v1.2.0 available)
+      No build installed
+    Uses data already fetched for the menu, so it adds no extra network calls.
+    """
+    build_id, version = get_installed_info()
+    if not build_id:
+        return "No build installed"
+
+    latest = None
+    if build_id == updates.ADMIN_BUILD_ID:
+        name = updates.ADMIN_BUILD_NAME
+        if admin_build and admin_build.get('version_known'):
+            latest = admin_build['version']
+    else:
+        entry = next((b for b in (manifest or {}).get('builds', [])
+                      if b.get('id') == build_id), None)
+        name   = entry['name'] if entry else BUILD_NAMES.get(build_id, build_id)
+        latest = entry.get('version') if entry else None
+
+    status = f"Installed: {name} v{version}"
+    if latest and updates.is_newer(latest, version):
+        status += f"  [COLOR yellow](v{latest} available)[/COLOR]"
+    return status
+
+
 def main_menu():
     manifest = get_json(MANIFEST_URL)
 
@@ -593,7 +629,8 @@ def main_menu():
     admin_build, admin_token = updates.get_admin_build(manifest)
 
     options = ["Install Build", "Fresh Start", "First Run Setup", "Admin Settings"]
-    choice  = xbmcgui.Dialog().select("CutCable Wizard", options)
+    choice  = xbmcgui.Dialog().select(
+        f"CutCable Wizard  -  {installed_build_status(manifest, admin_build)}", options)
 
     if choice == 0:
         if not manifest and not admin_build:

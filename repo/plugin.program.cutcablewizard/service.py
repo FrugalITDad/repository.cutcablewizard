@@ -1,4 +1,4 @@
-import xbmc, xbmcgui, xbmcaddon, xbmcvfs, os, json, datetime, ssl, urllib.request
+import xbmc, xbmcgui, xbmcaddon, xbmcvfs, os, json, time, ssl, urllib.request
 from resources.lib import updates
 
 # ---------------------------------------------------------------------------
@@ -10,7 +10,6 @@ HOME       = xbmcvfs.translatePath("special://home/")
 MANIFEST_URL        = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
 FIRSTRUN_FILE       = os.path.join(HOME, 'firstrun.txt')
 INSTALLED_FILE      = os.path.join(HOME, 'installed_version.txt')
-LAST_CHECK_FILE     = os.path.join(HOME, 'last_update_check.txt')
 FIRSTRUN_STEPS_FILE = os.path.join(HOME, 'firstrun_steps.txt')
 
 # Seconds to wait after boot before starting First Run Setup.
@@ -533,22 +532,17 @@ def run_first_time_setup(monitor):
 # ---------------------------------------------------------------------------
 # Daily Update Check
 # ---------------------------------------------------------------------------
-def should_check_for_updates():
-    """Returns True once per day, storing the date in last_update_check.txt."""
-    today = datetime.date.today().isoformat()
-    if os.path.exists(LAST_CHECK_FILE):
-        try:
-            with open(LAST_CHECK_FILE, 'r') as f:
-                if f.read().strip() == today:
-                    return False
-        except Exception:
-            pass
-    try:
-        with open(LAST_CHECK_FILE, 'w') as f:
-            f.write(today)
-    except Exception:
-        pass
-    return True
+# How often to re-check while Kodi stays open (Fire TV / Google TV devices
+# often run Kodi for days without a restart).
+UPDATE_CHECK_INTERVAL = 24 * 3600
+
+
+def is_busy_for_prompt():
+    """Don't pop an update prompt over playback or another dialog."""
+    return (xbmc.Player().isPlaying() or
+            xbmc.getCondVisibility("System.HasModalDialog(true)") or
+            os.path.exists(FIRSTRUN_FILE) or
+            os.path.exists(updates.POST_UPDATE_FILE))
 
 
 def run_update_check():
@@ -597,6 +591,11 @@ def run_update_check():
         xbmc.log(f"[CutCableWizard] Update check: '{build_id}' is up to date (v{installed_version}).", xbmc.LOGINFO)
         return
 
+    if updates.is_snoozed(build_id, latest_version):
+        xbmc.log(f"[CutCableWizard] Update check: v{latest_version} available but the user "
+                 "asked to be reminded later.", xbmc.LOGINFO)
+        return
+
     xbmc.log(f"[CutCableWizard] Update available: {build_id} v{installed_version} -> v{latest_version}", xbmc.LOGINFO)
 
     if xbmcgui.Dialog().yesno(
@@ -608,7 +607,10 @@ def run_update_check():
         "(Your setup settings will be kept.)"
     ):
         # Goes straight to the update instead of the wizard's main menu.
+        updates.clear_snooze()
         xbmc.executebuiltin("RunPlugin(plugin://plugin.program.cutcablewizard/?action=update)")
+    else:
+        updates.ask_snooze(build_id, latest_version)
 
 
 # ---------------------------------------------------------------------------
@@ -622,12 +624,19 @@ def run_service():
         run_first_time_setup(monitor)
     elif os.path.exists(updates.POST_UPDATE_FILE):
         apply_post_update(monitor, standalone=True)
-    elif should_check_for_updates():
-        if not monitor.waitForAbort(15):
-            run_update_check()
+    elif not monitor.waitForAbort(15):
+        run_update_check()
 
-    while not monitor.waitForAbort(3600):
-        pass
+    # Re-check every 24h while Kodi stays open. Checks that come due during
+    # playback (or while setup is running) wait for the next idle moment.
+    last_check = time.time()
+    while not monitor.waitForAbort(300):
+        if time.time() - last_check < UPDATE_CHECK_INTERVAL:
+            continue
+        if is_busy_for_prompt():
+            continue
+        last_check = time.time()
+        run_update_check()
 
     xbmc.log("[CutCableWizard] Service stopped.", xbmc.LOGINFO)
 

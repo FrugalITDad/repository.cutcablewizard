@@ -6,8 +6,8 @@ Covers:
   - Admin build credentials (admin_config.json) and admin release lookup
   - Carrying First Run Setup choices across a same-build update
 """
-import os, re, json, ssl, shutil, urllib.request
-import xbmc, xbmcvfs, xbmcaddon
+import os, re, json, ssl, shutil, time, urllib.request
+import xbmc, xbmcgui, xbmcvfs, xbmcaddon
 
 ADDON_ID      = 'plugin.program.cutcablewizard'
 HOME          = xbmcvfs.translatePath("special://home/")
@@ -25,6 +25,7 @@ FIRSTRUN_STEPS_FILE = os.path.join(HOME, 'firstrun_steps.txt')
 FIRSTRUN_DONE_FILE  = os.path.join(HOME, 'firstrun_completed.json')
 POST_UPDATE_FILE    = os.path.join(HOME, 'post_update.json')
 RESTORE_DIR         = os.path.join(HOME, 'cutcable_restore')
+SNOOZE_FILE         = os.path.join(HOME, 'update_snooze.json')
 
 # Canonical order of First Run steps (must match service.run_first_time_setup)
 ALL_STEPS = ['subtitles', 'weather', 'device_name', 'simkl',
@@ -410,3 +411,62 @@ def clear_post_update():
             os.remove(POST_UPDATE_FILE)
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# "Remind me later" for update prompts
+# ---------------------------------------------------------------------------
+# (label, seconds) - None means "don't ask again until a newer version"
+SNOOZE_OPTIONS = [
+    ("Remind me tomorrow",          1 * 86400),
+    ("Remind me in 3 days",         3 * 86400),
+    ("Remind me in 1 week",         7 * 86400),
+    ("Remind me in 2 weeks",       14 * 86400),
+    ("Don't remind me about this version", None),
+]
+
+
+def is_snoozed(build_id, version):
+    """
+    True while the user has asked to be reminded later about this exact
+    build + version. A newer version always clears the snooze.
+    """
+    try:
+        with open(SNOOZE_FILE, 'r') as f:
+            data = json.load(f)
+    except Exception:
+        return False
+    if data.get('build_id') != build_id or data.get('version') != version:
+        return False
+    until = data.get('until')
+    if until is None:
+        return True
+    return time.time() < float(until)
+
+
+def clear_snooze():
+    try:
+        if os.path.exists(SNOOZE_FILE):
+            os.remove(SNOOZE_FILE)
+    except Exception:
+        pass
+
+
+def ask_snooze(build_id, version):
+    """
+    Shown after the user declines an update. Asks when to be reminded and
+    records it. Backing out of the list defaults to tomorrow.
+    """
+    labels = [label for label, _ in SNOOZE_OPTIONS]
+    sel = xbmcgui.Dialog().select("When should we remind you about this update?", labels)
+    if sel < 0:
+        sel = 0
+    label, seconds = SNOOZE_OPTIONS[sel]
+    data = {'build_id': build_id, 'version': version,
+            'until': None if seconds is None else time.time() + seconds}
+    try:
+        with open(SNOOZE_FILE, 'w') as f:
+            json.dump(data, f)
+        log(f"Update {build_id} v{version} snoozed: {label}")
+    except Exception as e:
+        log(f"Could not save update reminder: {e}", xbmc.LOGWARNING)
