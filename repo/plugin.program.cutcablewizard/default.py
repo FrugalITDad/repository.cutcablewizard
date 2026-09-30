@@ -1,5 +1,5 @@
 import xbmc, xbmcgui, xbmcaddon, os, sys, shutil, urllib.request, json, ssl, zipfile, xbmcvfs, re
-from resources.lib import updates
+from resources.lib import updates, buildtools, binaries
 
 # ---------------------------------------------------------------------------
 # Addon Constants
@@ -30,11 +30,12 @@ HIDDEN_BUILD_IDS = {'cordcutter_fresh_start'}
 # ---------------------------------------------------------------------------
 def get_json(url):
     try:
-        context = ssl._create_unverified_context()
         req = urllib.request.Request(url, headers={'User-Agent': 'Kodi-Wizard'})
-        with urllib.request.urlopen(req, context=context, timeout=15) as r:
+        with urllib.request.urlopen(req, context=updates.ssl_context(), timeout=15) as r:
             return json.loads(r.read().decode('utf-8'))
-    except Exception:
+    except Exception as e:
+        if updates.is_cert_error(e):
+            xbmc.log(f"[CutCableWizard] Certificate check failed for {url}: {e}", xbmc.LOGWARNING)
         return None
 
 
@@ -62,18 +63,7 @@ def get_installed_info():
         return None, None
 
 
-def github_api_request(api_url, token):
-    """Makes an authenticated request to the GitHub API and returns parsed JSON."""
-    context = ssl._create_unverified_context()
-    headers = {
-        'Authorization':        f'Bearer {token}',
-        'Accept':               'application/vnd.github+json',
-        'User-Agent':           'Kodi-Wizard',
-        'X-GitHub-Api-Version': '2022-11-28'
-    }
-    req = urllib.request.Request(api_url, headers=headers)
-    with urllib.request.urlopen(req, context=context, timeout=15) as r:
-        return json.loads(r.read().decode('utf-8'))
+github_api_request = updates.github_api_request
 
 
 def resolve_github_release_url(url, token):
@@ -176,11 +166,12 @@ def smart_fresh_start(manifest):
         return False
 
     zip_path = os.path.join(HOME, "freshstart.zip")
+    admin_config = None
     dp = xbmcgui.DialogProgress()
     dp.create("Fresh Start", "Downloading clean slate...")
 
     try:
-        context = ssl._create_unverified_context()
+        context = updates.ssl_context()
         with urllib.request.urlopen(fresh_build['download_url'], context=context) as r, \
              open(zip_path, 'wb') as f:
             total = int(r.info().get('Content-Length', 0))
@@ -206,6 +197,10 @@ def smart_fresh_start(manifest):
             raise zipfile.BadZipFile(f"Corrupt file in zip: {bad_file}")
 
         dp.update(0, "Wiping Kodi...")
+        # Keep admin URL / tokens on devices that have them, and never let an
+        # older wizard inside the clean-slate zip replace this one.
+        admin_config = updates.backup_admin_config()
+        updates.stash_running_wizard()
         wipe_kodi()
 
         dp.update(0, "Restoring clean slate...")
@@ -220,6 +215,9 @@ def smart_fresh_start(manifest):
                     )
                 zf.extract(zipped_file, HOME)
 
+        updates.restore_admin_config(admin_config)
+        updates.restore_newest_wizard()
+
         dp.close()
         if os.path.exists(zip_path):
             os.remove(zip_path)
@@ -229,9 +227,11 @@ def smart_fresh_start(manifest):
         dp.close()
         if os.path.exists(zip_path):
             os.remove(zip_path)
+        updates.restore_admin_config(admin_config)   # no-op if nothing was saved
+        updates.restore_newest_wizard()
         xbmcgui.Dialog().ok(
             "Fresh Start Error",
-            f"Fresh Start failed:\n\n{str(e)}\n\n"
+            f"Fresh Start failed:\n\n{updates.CERT_ERROR_HELP if updates.is_cert_error(e) else str(e)}\n\n"
             "Your existing setup has not been modified."
         )
         return False
@@ -265,11 +265,12 @@ def install_build(url, name, version, build_id,
         ):
             return
 
+    admin_config = None
     dp = xbmcgui.DialogProgress()
     dp.create("CordCutter Wizard", f"Downloading {name}...")
 
     try:
-        context = ssl._create_unverified_context()
+        context = updates.ssl_context()
         headers = {'User-Agent': 'Kodi-Wizard', 'Accept': 'application/octet-stream'}
         if extra_headers:
             headers.update(extra_headers)
@@ -285,7 +286,8 @@ def install_build(url, name, version, build_id,
                 dp.close()
                 xbmcgui.Dialog().ok(
                     "Download Error",
-                    f"Could not locate the admin build asset.\n\n{str(resolve_err)}"
+                    f"Could not locate the admin build asset.\n\n"
+                    f"{updates.CERT_ERROR_HELP if updates.is_cert_error(resolve_err) else str(resolve_err)}"
                 )
                 return
 
@@ -329,8 +331,15 @@ def install_build(url, name, version, build_id,
         if bad_file:
             raise zipfile.BadZipFile(f"Corrupt file in zip: {bad_file}")
 
+        # Different kind of device than the Fire TV the build was made on?
+        # Fetch the right Live TV / InputStream add-ons now, before wiping.
+        dp.update(0, "Checking this device...")
+        replacements, _ = binaries.prepare(zip_path, progress=lambda p, m: dp.update(p, m))
+        skip_prefixes = tuple(f"addons/{a}/" for a in replacements)
+
         dp.update(0, "Preparing for installation...")
         admin_config = updates.backup_admin_config()
+        updates.stash_running_wizard()
         keep_state   = None
         if is_update:
             dp.update(0, "Saving your current setup settings...")
@@ -347,13 +356,21 @@ def install_build(url, name, version, build_id,
                         int(i * 100 / total_files),
                         f"Extracting: {zipped_file.filename[:35]}"
                     )
+                if skip_prefixes and zipped_file.filename.startswith(skip_prefixes):
+                    continue            # replaced by this device's version below
                 zf.extract(zipped_file, HOME)
+
+        if replacements:
+            dp.update(100, "Installing add-ons for this device...")
+            binaries.install(replacements)
 
         with open(os.path.join(HOME, 'installed_version.txt'), 'w') as f:
             f.write(f"{build_id}|{version}")
 
         # Admin URL/token live under userdata, which wipe_kodi() removes.
         updates.restore_admin_config(admin_config)
+        # Don't let an older wizard bundled in the build replace this one.
+        updates.restore_newest_wizard()
 
         if keep_state is not None:
             dp.update(0, "Restoring your setup settings...")
@@ -397,9 +414,12 @@ def install_build(url, name, version, build_id,
         dp.close()
         if os.path.exists(zip_path):
             os.remove(zip_path)
+        updates.restore_admin_config(admin_config)   # no-op if nothing was saved
+        updates.restore_newest_wizard()
+        binaries.cleanup()
         xbmcgui.Dialog().ok(
             "Installation Error",
-            f"Installation failed:\n\n{str(e)}\n\n"
+            f"Installation failed:\n\n{updates.CERT_ERROR_HELP if updates.is_cert_error(e) else str(e)}\n\n"
             "Your existing setup has not been modified."
         )
 
@@ -470,51 +490,90 @@ def trigger_first_run_setup(manifest):
 # ---------------------------------------------------------------------------
 # Admin Settings
 # ---------------------------------------------------------------------------
+def _mask(token):
+    return f"****{token[-4:]}" if token and len(token) > 8 else ("Set" if token else "Not set")
+
+
+def _input_token(heading):
+    """Hidden input. Returns '' if left blank or cancelled."""
+    return xbmcgui.Dialog().input(heading, option=xbmcgui.ALPHANUM_HIDE_INPUT).strip()
+
+
 def configure_admin_settings():
-    """
-    Prompts for admin build URL and access token using input dialogs.
-    Values are stored via ADDON.setSetting() in the addon local data folder.
-    """
-    current_url, current_token = load_admin_settings()
-    current_url   = current_url or ''
-    current_token = current_token or ''  
+    """Admin build URL + read token. Blank/Back keeps the current value."""
+    data          = updates._read_config()
+    current_url   = (data.get('admin_build_url') or '').strip()
+    current_token = (data.get('admin_token') or '').strip()
+    dialog        = xbmcgui.Dialog()
 
-    status_url   = current_url if current_url else "Not set"
-    status_token = "Configured" if current_token else "Not set"
+    choice = dialog.select("Admin Build Access", [
+        f"Build URL: {current_url or 'Not set'}",
+        f"Access Token: {_mask(current_token)}",
+        "Clear URL and Token from this device",
+    ])
+    if choice == 0:
+        url = dialog.input("Admin Build URL (leave blank to keep current)",
+                           defaultt=current_url).strip()
+        if url and url != current_url:
+            updates.save_admin_settings(url, current_token)
+            dialog.ok("Admin Settings Saved", "Build URL saved.")
+    elif choice == 1:
+        token = _input_token("Access Token (hidden - leave blank to keep current)")
+        if token:
+            updates.save_admin_settings(current_url, token)
+            dialog.ok("Admin Settings Saved",
+                      "Access Token saved." + ("" if current_url else
+                      "\n\nAdd the Build URL too for the Admin build to appear."))
+    elif choice == 2:
+        if dialog.yesno("Clear Admin Access",
+                        "Remove the Admin Build URL and Access Token from this device?"):
+            updates.save_admin_settings('', '')
+            dialog.ok("Admin Settings", "Admin URL and Token removed.")
 
-    if not xbmcgui.Dialog().yesno(
-        "Admin Settings",
-        f"Build URL: [B]{status_url}[/B]\n"
-        f"Access Token: [B]{status_token}[/B]\n\n"
-        "Would you like to update these settings?"
-    ):
-        return
 
-    url = xbmcgui.Dialog().input("Admin Build URL", defaultt=current_url)
-    if url is None:
-        return
+def configure_publish_token():
+    """Write-capable token used only by Package & Publish."""
+    dialog  = xbmcgui.Dialog()
+    current = updates.load_publish_token()
+    choice  = dialog.select(f"Publishing Token: {_mask(current)}", [
+        "Set / replace Publishing Token",
+        "Remove Publishing Token from this device",
+        "What permissions does it need?",
+    ])
+    if choice == 0:
+        token = _input_token("Publishing Token (hidden)")
+        if token:
+            updates.set_config_value('publish_token', token)
+            dialog.ok("Publishing Token", "Saved on this device only. It is never included in any build.")
+    elif choice == 1:
+        if dialog.yesno("Publishing Token", "Remove the Publishing Token from this device?"):
+            updates.set_config_value('publish_token', None)
+            dialog.ok("Publishing Token", "Removed.")
+    elif choice == 2:
+        dialog.textviewer("Publishing Token", (
+            "Create a fine-grained personal access token on GitHub:\n"
+            "Settings > Developer settings > Fine-grained tokens > Generate new token\n\n"
+            "Repository access: Only select repositories\n"
+            "  - repository.cutcablewizard\n"
+            "  - your private admin build repository\n\n"
+            "Permissions: Contents = Read and write (nothing else)\n"
+            "Expiration: set one (e.g. 90 days) and replace it when it expires.\n\n"
+            "Only add it on the device(s) you build on. It is stored in the wizard's "
+            "settings file on this device, is never put in a build, and is kept through build installs and Fresh Start. Use Remove above to take it off a device."))
 
-    token = xbmcgui.Dialog().input("Access Token", defaultt=current_token)
-    if token is None:
-        return
 
-    if not save_admin_settings(url.strip(), token.strip()):
-        xbmcgui.Dialog().ok(
-            "Admin Settings Error",
-            "Could not save settings to disk.\n\n"
-            "Please check that the addon data folder is writable."
-        )
-        return
-
-    if url.strip() and token.strip():
-        msg = ("Your admin settings have been saved to this device.\n\n"
-               "The Admin build will now appear in the Install Build menu.")
-    else:
-        msg = ("Settings saved.\n\n"
-               "Note: both URL and Token must be set for the "
-               "Admin build to appear in the menu.")
-
-    xbmcgui.Dialog().ok("Admin Settings Saved", msg)
+def admin_menu(manifest):
+    admin_url, admin_token = load_admin_settings()
+    publish_token          = updates.load_publish_token()
+    options = [("Admin Build Access (URL & Token)", configure_admin_settings),
+               (f"Publishing Token  [{_mask(publish_token)}]", configure_publish_token)]
+    # Build packaging only on devices already set up for the admin build
+    if admin_url and admin_token:
+        options.append(("Package & Publish Build",
+                        lambda: buildtools.package_and_publish(manifest)))
+    choice = xbmcgui.Dialog().select("Admin Settings", [o[0] for o in options])
+    if choice >= 0:
+        options[choice][1]()
 
 
 # ---------------------------------------------------------------------------
@@ -683,7 +742,7 @@ def main_menu():
         trigger_first_run_setup(manifest)
 
     elif choice == 3:
-        configure_admin_settings()
+        admin_menu(manifest)
 
     check_for_updates(manifest)
 

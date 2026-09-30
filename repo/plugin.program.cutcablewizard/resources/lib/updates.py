@@ -113,15 +113,61 @@ def load_admin_settings():
     return None, None
 
 
-def save_admin_settings(url, token):
+def _read_config():
     try:
-        os.makedirs(ADDON_PROFILE, exist_ok=True)
-        with open(ADMIN_CONFIG_FILE, 'w') as f:
-            json.dump({'admin_build_url': url, 'admin_token': token}, f)
+        with open(ADMIN_CONFIG_FILE, 'r') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_config(data):
+    os.makedirs(ADDON_PROFILE, exist_ok=True)
+    tmp = ADMIN_CONFIG_FILE + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(data, f)
+    os.replace(tmp, ADMIN_CONFIG_FILE)
+    try:
+        os.chmod(ADMIN_CONFIG_FILE, 0o600)
+    except Exception:
+        pass
+
+
+def save_admin_settings(url, token):
+    """Saves the admin URL/token, keeping any other saved values (publishing token etc.)."""
+    try:
+        data = _read_config()
+        data['admin_build_url'] = url
+        data['admin_token']     = token
+        _write_config(data)
         return True
     except Exception as e:
         log(f"Failed to save admin settings: {e}", xbmc.LOGWARNING)
         return False
+
+
+def get_config_value(key, default=None):
+    return _read_config().get(key, default)
+
+
+def set_config_value(key, value):
+    """Sets (or with value=None removes) one value in admin_config.json."""
+    try:
+        data = _read_config()
+        if value is None:
+            data.pop(key, None)
+        else:
+            data[key] = value
+        _write_config(data)
+        return True
+    except Exception as e:
+        log(f"Failed to save setting {key}: {e}", xbmc.LOGWARNING)
+        return False
+
+
+def load_publish_token():
+    return (get_config_value('publish_token') or '').strip() or None
 
 
 def backup_admin_config():
@@ -154,8 +200,48 @@ _RELEASE_URL_RE = re.compile(
 _ASSET_VER_RE   = re.compile(r'^(.*?)[-_]?v?(\d+(?:\.\d+)+)\.zip$', re.I)
 
 
+_SSL_CTX = None
+
+
+def ssl_context():
+    """
+    Verified TLS context. Uses the system store plus Kodi's bundled CA file
+    (Android/Fire TV Python has no system store of its own) and certifi if
+    present. Certificates are always checked; there is no unverified fallback.
+    """
+    global _SSL_CTX
+    if _SSL_CTX is None:
+        ctx = ssl.create_default_context()
+        candidates = [os.environ.get('SSL_CERT_FILE', ''),
+                      xbmcvfs.translatePath('special://xbmc/system/certs/cacert.pem')]
+        try:
+            import certifi
+            candidates.append(certifi.where())
+        except Exception:
+            pass
+        for path in candidates:
+            if path and os.path.exists(path):
+                try:
+                    ctx.load_verify_locations(path)
+                except Exception:
+                    pass
+        _SSL_CTX = ctx
+    return _SSL_CTX
+
+
+def is_cert_error(err):
+    """True if an exception is a certificate/TLS verification failure."""
+    reason = getattr(err, 'reason', err)
+    return isinstance(reason, ssl.SSLError) or isinstance(err, ssl.SSLError)
+
+
+CERT_ERROR_HELP = ("The secure connection to GitHub could not be verified, so nothing "
+                   "was downloaded.\n\nThis is usually caused by the device's date and "
+                   "time being wrong. Check Settings > Date & Time and try again.")
+
+
 def github_api_request(api_url, token):
-    context = ssl._create_unverified_context()
+    context = ssl_context()
     headers = {
         'Authorization':        f'Bearer {token}',
         'Accept':               'application/vnd.github+json',
@@ -511,3 +597,163 @@ def prompt_update(name, installed, latest, changelog='', heading="Update Availab
             dialog.textviewer(f"What's new in {name} v{latest}", changelog)
             continue
         return result == 1
+
+
+# ---------------------------------------------------------------------------
+# Keep the newest wizard across a build install
+# ---------------------------------------------------------------------------
+# Build zips contain a copy of this wizard. If that copy is older than the one
+# doing the install, the device would boot into the old wizard (which may not
+# know how to finish an update). Keep whichever is newer.
+WIZARD_KEEP_DIR = os.path.join(HOME, 'cutcable_wizard_keep')
+
+
+def _addon_xml_version(addon_dir):
+    try:
+        with open(os.path.join(addon_dir, 'addon.xml'), 'r', encoding='utf-8') as f:
+            m = re.search(r'<addon\b[^>]*\bversion="([^"]+)"', f.read())
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def stash_running_wizard():
+    """Call BEFORE wipe_kodi(). Copies the running wizard aside."""
+    try:
+        src = xbmcvfs.translatePath(xbmcaddon.Addon(ADDON_ID).getAddonInfo('path'))
+        shutil.rmtree(WIZARD_KEEP_DIR, ignore_errors=True)
+        shutil.copytree(src, WIZARD_KEEP_DIR,
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        return True
+    except Exception as e:
+        log(f"Could not stash running wizard: {e}", xbmc.LOGWARNING)
+        return False
+
+
+def restore_newest_wizard():
+    """Call AFTER extracting the build. Puts the stashed wizard back if it is newer."""
+    try:
+        if not os.path.isdir(WIZARD_KEEP_DIR):
+            return
+        dest     = os.path.join(HOME, 'addons', ADDON_ID)
+        running  = _addon_xml_version(WIZARD_KEEP_DIR)
+        bundled  = _addon_xml_version(dest) if os.path.isdir(dest) else None
+        if running and (bundled is None or is_newer(running, bundled)):
+            shutil.rmtree(dest, ignore_errors=True)
+            shutil.copytree(WIZARD_KEEP_DIR, dest)
+            log(f"Kept wizard v{running} (build contained v{bundled}).")
+        else:
+            log(f"Build's wizard v{bundled} is current; keeping it.")
+    except Exception as e:
+        log(f"Could not restore newest wizard: {e}", xbmc.LOGWARNING)
+    finally:
+        shutil.rmtree(WIZARD_KEEP_DIR, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Compiled (binary) add-ons built for a different device
+# ---------------------------------------------------------------------------
+# Builds are made on Fire TV, so add-ons with compiled code (Live TV,
+# InputStream, ...) are built for 32-bit ARM Android. Other devices - e.g.
+# Google TV running 64-bit Kodi, Windows, Mac - can't load them. These get
+# removed and reinstalled from the official Kodi repository instead.
+# Their settings in userdata/addon_data are kept (they aren't device specific).
+FRIENDLY_ADDON_NAMES = {
+    'pvr.iptvsimple':           'Live TV (IPTV Simple)',
+    'pvr.hdhomerun':            'Live TV (HDHomeRun)',
+    'inputstream.adaptive':     'Streaming support (InputStream Adaptive)',
+    'inputstream.ffmpegdirect': 'Streaming support (FFmpegDirect)',
+    'inputstream.rtmp':         'Streaming support (RTMP)',
+    'vfs.libarchive':           'Archive support',
+    'visualization.starburst':  'Music visualization',
+}
+_NATIVE_EXT = ('.so', '.dll', '.dylib')
+
+
+def this_platform():
+    """
+    Returns (tags, label): the Kodi <platform> names this device can load,
+    and a readable description. Uses the Kodi process's own bitness, so a
+    32-bit Kodi on 64-bit hardware (typical Fire TV) is reported as armv7.
+    """
+    import platform, struct
+    bits = struct.calcsize('P') * 8
+    mach = (platform.machine() or '').lower()
+    arm  = mach.startswith(('arm', 'aarch'))
+    x86  = mach in ('x86_64', 'amd64', 'i386', 'i686', 'x86')
+    cond = xbmc.getCondVisibility
+
+    if cond('System.Platform.Android'):
+        if arm:
+            tag = 'android-armv7' if bits == 32 else 'android-aarch64'
+        elif x86:
+            tag = 'android-x86' if bits == 32 else 'android-x86_64'
+        else:
+            tag = 'android'
+        return {'android', tag}, f"{bits}-bit Android"
+    if cond('System.Platform.Windows') or cond('System.Platform.UWP'):
+        tag = 'windows-x86_64' if bits == 64 else 'windows-i686'
+        return {'windows', 'windx', 'windowsstore', tag}, "Windows"
+    if cond('System.Platform.IOS'):
+        return {'ios', 'ios-aarch64', 'darwin_embedded'}, "iOS"
+    if cond('System.Platform.TVOS'):
+        return {'tvos', 'tvos-aarch64', 'darwin_embedded'}, "Apple TV"
+    if cond('System.Platform.OSX'):
+        tag = 'osx-arm64' if arm else 'osx-x86_64'
+        return {'osx', 'osx64', tag}, "Mac"
+    if cond('System.Platform.Linux'):
+        return {'linux'}, "Linux"
+    return set(), "this device"
+
+
+def _read_platform_info(addon_dir):
+    """Returns (platform_tags, has_native_code) from an add-on folder."""
+    try:
+        with open(os.path.join(addon_dir, 'addon.xml'), 'r', encoding='utf-8', errors='replace') as f:
+            xml = f.read()
+    except Exception:
+        return None, False
+    tags = set()
+    for block in re.findall(r'<platform>([^<]*)</platform>', xml):
+        tags.update(block.split())
+    native = bool(re.search(r'\blibrary_\w+="', xml))
+    if not native:
+        for _root, _dirs, files in os.walk(addon_dir):
+            if any(f.endswith(_NATIVE_EXT) for f in files):
+                native = True
+                break
+    return tags, native
+
+
+def find_incompatible_addons():
+    """
+    Add-ons in special://home/addons with compiled code that were built for a
+    different platform than this device. Python-only add-ons are never touched.
+    """
+    base = os.path.join(HOME, 'addons')
+    tags_here, _ = this_platform()
+    bad = []
+    if not tags_here or not os.path.isdir(base):
+        return bad          # unknown device type: never remove anything
+    for name in sorted(os.listdir(base)):
+        path = os.path.join(base, name)
+        if not os.path.isdir(path) or name in ('packages', 'temp'):
+            continue
+        tags, native = _read_platform_info(path)
+        if not native or not tags or 'all' in tags:
+            continue
+        if not (tags & tags_here):
+            bad.append(name)
+    return bad
+
+
+def remove_addon_folders(addon_ids):
+    removed = []
+    for addon_id in addon_ids:
+        path = os.path.join(HOME, 'addons', addon_id)
+        try:
+            shutil.rmtree(path)
+            removed.append(addon_id)
+        except Exception as e:
+            log(f"Could not remove {addon_id}: {e}", xbmc.LOGWARNING)
+    return removed

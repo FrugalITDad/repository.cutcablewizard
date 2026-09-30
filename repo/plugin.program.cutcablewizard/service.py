@@ -183,11 +183,12 @@ def wait_for_external_window(monitor, timeout_appear=10, timeout_close=300):
 
 def get_json(url):
     try:
-        context = ssl._create_unverified_context()
         req = urllib.request.Request(url, headers={'User-Agent': 'Kodi-Wizard'})
-        with urllib.request.urlopen(req, context=context, timeout=15) as r:
+        with urllib.request.urlopen(req, context=updates.ssl_context(), timeout=15) as r:
             return json.loads(r.read().decode('utf-8'))
-    except Exception:
+    except Exception as e:
+        if updates.is_cert_error(e):
+            xbmc.log(f"[CutCableWizard] Certificate check failed for {url}: {e}", xbmc.LOGWARNING)
         return None
 
 
@@ -231,6 +232,70 @@ def run_iptv_sync(monitor, title):
 
 
 # ---------------------------------------------------------------------------
+# Device-specific (compiled) add-ons
+# ---------------------------------------------------------------------------
+def fix_platform_addons(monitor):
+    """
+    Replaces compiled add-ons built for another device (e.g. the Fire TV's
+    32-bit Live TV add-on on a 64-bit Google TV) with the right version from
+    the official Kodi repository. Settings in addon_data are left untouched.
+    Returns True if anything was changed.
+    """
+    bad = updates.find_incompatible_addons()
+    if not bad:
+        return False
+    _tags, device = updates.this_platform()
+    names = [updates.FRIENDLY_ADDON_NAMES.get(a, a) for a in bad]
+    xbmc.log(f"[CutCableWizard] Add-ons built for another device: {bad} (this is {device}, "
+             f"platform tags {sorted(_tags)})", xbmc.LOGINFO)
+
+    xbmcgui.Dialog().ok(
+        "Setting Up For This Device",
+        f"This build was made on a Fire TV. This device ({device}) needs its own "
+        "version of:\n\n  - " + "\n  - ".join(names) + "\n\n"
+        "They will be downloaded from the official Kodi repository. Your Live TV "
+        "and streaming settings are kept.\n\n"
+        "If Kodi asks you to confirm an install, choose [B]Yes[/B]."
+    )
+
+    updates.remove_addon_folders(bad)
+    xbmc.executebuiltin('UpdateLocalAddons', True)
+    monitor.waitForAbort(3)
+
+    dp = xbmcgui.DialogProgress()
+    dp.create("Setting Up For This Device", "Preparing...")
+    failed = []
+    for i, addon_id in enumerate(bad):
+        if monitor.abortRequested():
+            break
+        label = updates.FRIENDLY_ADDON_NAMES.get(addon_id, addon_id)
+        dp.update(int(i * 100 / len(bad)), f"Installing {label}...")
+        if not is_addon_present(addon_id):
+            dp.close()
+            xbmc.executebuiltin(f'InstallAddon({addon_id})', True)
+            dp.create("Setting Up For This Device", f"Installing {label}...")
+            for _ in range(120):                      # wait up to 2 minutes
+                if is_addon_present(addon_id) or monitor.waitForAbort(1):
+                    break
+        if is_addon_present(addon_id):
+            enable_addon(addon_id)
+        else:
+            failed.append(label)
+    dp.close()
+
+    if failed:
+        xbmc.log(f"[CutCableWizard] Could not install for this device: {failed}", xbmc.LOGWARNING)
+        linux = "\n\nOn Linux, install these with your system's package manager (e.g. kodi-pvr-iptvsimple)." \
+                if device == "Linux" else ""
+        xbmcgui.Dialog().ok(
+            "Some Add-ons Not Installed",
+            "These could not be installed automatically:\n\n  - " + "\n  - ".join(failed) +
+            "\n\nInstall them from Add-ons > Install from repository > Kodi Add-on "
+            "repository." + linux)
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Post-Update Restore
 # ---------------------------------------------------------------------------
 def wait_for_boot(monitor):
@@ -265,6 +330,7 @@ def apply_post_update(monitor, standalone):
         if not wait_for_boot(monitor):
             return
         xbmc.executebuiltin('ReplaceWindow(10000)')
+        fix_platform_addons(monitor)
 
     for key, value in state.get('settings', {}).items():
         set_kodi_setting(key, value)
@@ -364,6 +430,9 @@ def run_first_time_setup(monitor):
 
     # ── Update that added new steps: re-apply kept settings first ─────────
     apply_post_update(monitor, standalone=False)
+
+    # ── Replace add-ons compiled for a different device (before IPTV sync) ─
+    fix_platform_addons(monitor)
 
     # ── Determine which steps are active for this build ───────────────────
     ALL_STEPS = ['subtitles', 'weather', 'device_name', 'simkl',
@@ -622,6 +691,10 @@ def run_service():
     elif os.path.exists(updates.POST_UPDATE_FILE):
         apply_post_update(monitor, standalone=True)
     elif not monitor.waitForAbort(15):
+        # Repairs devices that got a build made for another device type
+        # (does nothing on a matching device such as a Fire TV).
+        if updates.find_incompatible_addons() and wait_for_boot(monitor):
+            fix_platform_addons(monitor)
         run_update_check()
 
     # Re-check every 24h while Kodi stays open. Checks that come due during
