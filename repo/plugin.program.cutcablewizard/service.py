@@ -1,4 +1,5 @@
 import xbmc, xbmcgui, xbmcaddon, xbmcvfs, os, json, datetime, ssl, urllib.request
+from resources.lib import updates
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -211,6 +212,87 @@ def get_installed_info():
 
 
 # ---------------------------------------------------------------------------
+# IPTV Guide Sync (used by First Run and by post-update restore)
+# ---------------------------------------------------------------------------
+def run_iptv_sync(monitor, title):
+    enable_addon("plugin.program.iptv.merge")
+    xbmc.sleep(1000)
+    xbmc.executebuiltin("RunPlugin(plugin://plugin.program.iptv.merge/?_=merge)")
+    dp = xbmcgui.DialogProgress()
+    dp.create(title, "Syncing Live TV Guide...")
+    total_time = 90
+    for i in range(total_time):
+        if monitor.waitForAbort(1) or dp.iscanceled():
+            break
+        dp.update(
+            int((i / float(total_time)) * 100),
+            f"Finalizing IPTV Guide setup...\nTime remaining: {total_time - i}s"
+        )
+    dp.close()
+
+
+# ---------------------------------------------------------------------------
+# Post-Update Restore
+# ---------------------------------------------------------------------------
+def wait_for_boot(monitor):
+    """Boot delay + wait for skin/busy/modal dialogs. Returns False on abort."""
+    if monitor.waitForAbort(FIRSTRUN_BOOT_DELAY):
+        return False
+    while is_skin_busy(monitor):
+        if monitor.waitForAbort(5):
+            return False
+    waited = 0
+    while xbmc.getCondVisibility("System.HasModalDialog(true)") and waited < 600:
+        if monitor.waitForAbort(2):
+            return False
+        waited += 2
+    return True
+
+
+def apply_post_update(monitor, standalone):
+    """
+    Finishes a same-build update: re-applies the Kodi settings and addon
+    enabled states captured before the wipe (addon_data files were already
+    copied back by the installer) and re-runs the Live TV guide sync.
+    When `standalone` is True (no First Run steps pending) this handles the
+    boot wait and shows a completion message itself.
+    """
+    state = updates.read_post_update()
+    if not state:
+        return
+
+    if standalone:
+        xbmc.log("[CutCableWizard] Post-update: waiting for skin to settle.", xbmc.LOGINFO)
+        if not wait_for_boot(monitor):
+            return
+        xbmc.executebuiltin('ReplaceWindow(10000)')
+
+    for key, value in state.get('settings', {}).items():
+        set_kodi_setting(key, value)
+        xbmc.log(f"[CutCableWizard] Post-update: restored setting {key}", xbmc.LOGINFO)
+
+    for addon_id, enabled in state.get('addons', {}).items():
+        if is_addon_present(addon_id):
+            (enable_addon if enabled else disable_addon)(addon_id)
+
+    if state.get('iptv_sync'):
+        run_iptv_sync(monitor, "Update: Refreshing Live TV Guide")
+
+    updates.clear_post_update()
+    xbmc.log("[CutCableWizard] Post-update restore complete.", xbmc.LOGINFO)
+
+    if standalone:
+        xbmc.executebuiltin('SaveSceneSettings')
+        xbmcgui.Dialog().ok(
+            "Update Complete",
+            f"[B]{state.get('name', 'Your build')} v{state.get('version', '')}[/B] "
+            "is ready and your previous setup settings have been kept.\n\n"
+            "To change them, open the CutCable Wizard and choose "
+            "[B]First Run Setup[/B]."
+        )
+
+
+# ---------------------------------------------------------------------------
 # First Run Setup
 # ---------------------------------------------------------------------------
 def read_firstrun_steps():
@@ -280,6 +362,9 @@ def run_first_time_setup(monitor):
 
     xbmc.executebuiltin('ReplaceWindow(10000)')
     dialog = xbmcgui.Dialog()
+
+    # ── Update that added new steps: re-apply kept settings first ─────────
+    apply_post_update(monitor, standalone=False)
 
     # ── Determine which steps are active for this build ───────────────────
     ALL_STEPS = ['subtitles', 'weather', 'device_name', 'simkl',
@@ -399,23 +484,7 @@ def run_first_time_setup(monitor):
 
     # ── Step: IPTV Guide Sync ─────────────────────────────────────────────
     if 'iptv_sync' in active:
-        enable_addon("plugin.program.iptv.merge")
-        xbmc.sleep(1000)
-        xbmc.executebuiltin("RunPlugin(plugin://plugin.program.iptv.merge/?_=merge)")
-        dp = xbmcgui.DialogProgress()
-        dp.create(
-            f"Setup ({n('iptv_sync')}/{total}): IPTV Guide Sync",
-            "Syncing Live TV Guide..."
-        )
-        total_time = 90
-        for i in range(total_time):
-            if monitor.waitForAbort(1) or dp.iscanceled():
-                break
-            dp.update(
-                int((i / float(total_time)) * 100),
-                f"Finalizing IPTV Guide setup...\nTime remaining: {total_time - i}s"
-            )
-        dp.close()
+        run_iptv_sync(monitor, f"Setup ({n('iptv_sync')}/{total}): IPTV Guide Sync")
 
     # ── Step: EZ Maintenance+ Buffer Optimization ─────────────────────────
     if 'buffer' in active:
@@ -435,6 +504,12 @@ def run_first_time_setup(monitor):
                 wait_for_external_window(monitor, timeout_appear=10, timeout_close=300)
         else:
             xbmc.log("[CutCableWizard] script.ezmaintenanceplus not found – skipping.", xbmc.LOGINFO)
+
+    # ── Record which steps are done so future updates can skip them ───────
+    build_id, _ = get_installed_info()
+    if build_id:
+        previous = updates.read_completed_firstrun(build_id) or []
+        updates.write_completed_firstrun(build_id, set(previous) | set(active))
 
     # ── Cleanup & finish ──────────────────────────────────────────────────
     for trigger in [FIRSTRUN_FILE, FIRSTRUN_STEPS_FILE]:
@@ -478,40 +553,62 @@ def should_check_for_updates():
 
 def run_update_check():
     """
-    Fetches the manifest and prompts the user if a newer version of their
-    installed build is available. Runs silently on any failure.
+    Prompts the user if a newer version of their installed build is published.
+    Public builds are checked against builds.json. The admin build is checked
+    against its private GitHub releases, but only when an admin URL + token
+    are configured on this device AND the admin build is installed.
+    Runs silently on any failure.
     """
     build_id, installed_version = get_installed_info()
     if not build_id or not installed_version:
         return
 
-    manifest = get_json(MANIFEST_URL)
-    if not manifest:
-        xbmc.log("[CutCableWizard] Update check: could not reach manifest.", xbmc.LOGWARNING)
-        return
+    if build_id == updates.ADMIN_BUILD_ID:
+        admin_url, admin_token = updates.load_admin_settings()
+        if not (admin_url and admin_token):
+            xbmc.log("[CutCableWizard] Update check: admin build installed but no "
+                     "admin URL/token configured - skipping.", xbmc.LOGINFO)
+            return
+        try:
+            latest = updates.find_latest_admin_release(admin_url, admin_token)
+        except Exception as e:
+            xbmc.log(f"[CutCableWizard] Update check: admin release lookup failed: {e}",
+                     xbmc.LOGWARNING)
+            return
+        if not latest:
+            return
+        build_name     = updates.ADMIN_BUILD_NAME
+        latest_version = latest['version']
+    else:
+        manifest = get_json(MANIFEST_URL)
+        if not manifest:
+            xbmc.log("[CutCableWizard] Update check: could not reach manifest.", xbmc.LOGWARNING)
+            return
 
-    builds        = manifest.get('builds', [])
-    current_build = next((b for b in builds if b['id'] == build_id), None)
-    if not current_build:
-        xbmc.log(f"[CutCableWizard] Update check: build '{build_id}' not found in manifest.", xbmc.LOGWARNING)
-        return
+        builds        = manifest.get('builds', [])
+        current_build = next((b for b in builds if b['id'] == build_id), None)
+        if not current_build:
+            xbmc.log(f"[CutCableWizard] Update check: build '{build_id}' not found in manifest.", xbmc.LOGWARNING)
+            return
+        build_name     = current_build['name']
+        latest_version = current_build.get('version', '')
 
-    latest_version = current_build.get('version', '')
-    if not latest_version or latest_version == installed_version:
+    if not updates.is_newer(latest_version, installed_version):
         xbmc.log(f"[CutCableWizard] Update check: '{build_id}' is up to date (v{installed_version}).", xbmc.LOGINFO)
         return
 
-    xbmc.log(f"[CutCableWizard] Update available: {build_id} v{installed_version} → v{latest_version}", xbmc.LOGINFO)
+    xbmc.log(f"[CutCableWizard] Update available: {build_id} v{installed_version} -> v{latest_version}", xbmc.LOGINFO)
 
     if xbmcgui.Dialog().yesno(
         "Build Update Available",
-        f"A new version of [B]{current_build['name']}[/B] is available!\n\n"
+        f"A new version of [B]{build_name}[/B] is available!\n\n"
         f"  Installed : v{installed_version}\n"
         f"  Available : v{latest_version}\n\n"
         "Would you like to update now?\n"
-        "(You can also update later via the CutCable Wizard.)"
+        "(Your setup settings will be kept.)"
     ):
-        xbmc.executebuiltin("RunAddon(plugin.program.cutcablewizard)")
+        # Goes straight to the update instead of the wizard's main menu.
+        xbmc.executebuiltin("RunPlugin(plugin://plugin.program.cutcablewizard/?action=update)")
 
 
 # ---------------------------------------------------------------------------
@@ -523,6 +620,8 @@ def run_service():
 
     if os.path.exists(FIRSTRUN_FILE):
         run_first_time_setup(monitor)
+    elif os.path.exists(updates.POST_UPDATE_FILE):
+        apply_post_update(monitor, standalone=True)
     elif should_check_for_updates():
         if not monitor.waitForAbort(15):
             run_update_check()

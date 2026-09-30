@@ -1,4 +1,5 @@
-import xbmc, xbmcgui, xbmcaddon, os, shutil, urllib.request, json, ssl, zipfile, xbmcvfs, re
+import xbmc, xbmcgui, xbmcaddon, os, sys, shutil, urllib.request, json, ssl, zipfile, xbmcvfs, re
+from resources.lib import updates
 
 # ---------------------------------------------------------------------------
 # Addon Constants
@@ -116,37 +117,9 @@ def resolve_github_release_url(url, token):
     return asset_api_url, dl_headers
 
 
-def load_admin_settings():
-    """
-    Reads admin credentials from admin_config.json in the addon profile folder.
-    This file is stored locally on the device and never in any public location.
-    Returns (url, token) if both are set, otherwise (None, None).
-    """
-    if not os.path.exists(ADMIN_CONFIG_FILE):
-        return None, None
-    try:
-        with open(ADMIN_CONFIG_FILE, 'r') as f:
-            data = json.load(f)
-        url   = data.get('admin_build_url', '').strip()
-        token = data.get('admin_token', '').strip()
-        if url and token:
-            return url, token
-    except Exception:
-        pass
-    return None, None
-
-
-def save_admin_settings(url, token):
-    """Writes admin credentials to admin_config.json in the addon profile folder."""
-    try:
-        if not os.path.exists(ADDON_PROFILE):
-            os.makedirs(ADDON_PROFILE, exist_ok=True)
-        with open(ADMIN_CONFIG_FILE, 'w') as f:
-            json.dump({'admin_build_url': url, 'admin_token': token}, f)
-        return True
-    except Exception as e:
-        xbmc.log(f"[CutCableWizard] Failed to save admin settings: {e}", xbmc.LOGWARNING)
-        return False
+# Admin credentials live in resources/lib/updates.py so the service can use them too.
+load_admin_settings = updates.load_admin_settings
+save_admin_settings = updates.save_admin_settings
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +137,8 @@ def wipe_kodi():
             except Exception:
                 pass
     for trigger in ['firstrun.txt', 'firstrun_steps.txt', 'installed_version.txt',
-                    'last_update_check.txt', 'post_fresh_start.txt']:
+                    'last_update_check.txt', 'post_fresh_start.txt',
+                    'firstrun_completed.json', 'post_update.json']:
         path = os.path.join(HOME, trigger)
         try:
             if os.path.exists(path):
@@ -270,6 +244,15 @@ def install_build(url, name, version, build_id,
     zip_path = os.path.join(HOME, "build.zip")
 
     installed_id, installed_version = get_installed_info()
+
+    # Same build, first run already finished -> this is an update. Carry the
+    # user's First Run choices over instead of asking them all again.
+    is_update = (installed_id == build_id
+                 and not os.path.exists(updates.FIRSTRUN_FILE))
+    carried, pending = ([], firstrun_steps)
+    if is_update:
+        carried, pending = updates.plan_same_build_update(build_id, firstrun_steps)
+
     if installed_id and installed_id != build_id:
         installed_name = BUILD_NAMES.get(installed_id, installed_id)
         if not xbmcgui.Dialog().yesno(
@@ -346,6 +329,11 @@ def install_build(url, name, version, build_id,
             raise zipfile.BadZipFile(f"Corrupt file in zip: {bad_file}")
 
         dp.update(0, "Preparing for installation...")
+        admin_config = updates.backup_admin_config()
+        keep_state   = None
+        if is_update:
+            dp.update(0, "Saving your current setup settings...")
+            keep_state = updates.snapshot_user_settings(carried)
         wipe_kodi()
 
         dp.update(0, "Extracting build files...")
@@ -363,23 +351,44 @@ def install_build(url, name, version, build_id,
         with open(os.path.join(HOME, 'installed_version.txt'), 'w') as f:
             f.write(f"{build_id}|{version}")
 
-        with open(os.path.join(HOME, 'firstrun.txt'), 'w') as f:
-            f.write("pending")
+        # Admin URL/token live under userdata, which wipe_kodi() removes.
+        updates.restore_admin_config(admin_config)
 
-        if firstrun_steps:
-            with open(FIRSTRUN_STEPS_FILE, 'w') as f:
-                f.write(','.join(firstrun_steps))
+        if keep_state is not None:
+            dp.update(0, "Restoring your setup settings...")
+            updates.restore_user_files(keep_state)
+            updates.write_post_update(keep_state, name, version)
+            updates.write_completed_firstrun(build_id, carried)
+
+        if keep_state is None or pending:
+            with open(os.path.join(HOME, 'firstrun.txt'), 'w') as f:
+                f.write("pending")
+            steps_to_run = pending if keep_state is not None else firstrun_steps
+            if steps_to_run:
+                with open(FIRSTRUN_STEPS_FILE, 'w') as f:
+                    f.write(','.join(steps_to_run))
 
         dp.close()
         if os.path.exists(zip_path):
             os.remove(zip_path)
 
+        if keep_state is None:
+            done_msg = ("[B]IMPORTANT:[/B] After you re-open Kodi, please wait "
+                        "approximately 45 seconds for the First Run Setup to begin automatically.")
+        elif pending:
+            done_msg = ("Your previous setup choices will be kept. This version adds "
+                        "new setup steps, so after you re-open Kodi please wait about "
+                        "45 seconds and you will be asked only about those.")
+        else:
+            done_msg = ("Your previous setup choices (device name, weather, accounts, "
+                        "buffer, etc.) will be kept - no First Run Setup needed.\n\n"
+                        "After you re-open Kodi, wait about 45 seconds while your "
+                        "settings are re-applied.")
+
         xbmcgui.Dialog().ok(
-            "Install Complete",
+            "Update Complete" if keep_state is not None else "Install Complete",
             f"[B]{name} v{version}[/B] has been applied!\n\n"
-            "Kodi must now FORCE CLOSE to load the new skin.\n\n"
-            "[B]IMPORTANT:[/B] After you re-open Kodi, please wait "
-            "approximately 45 seconds for the First Run Setup to begin automatically."
+            "Kodi must now FORCE CLOSE to load the new skin.\n\n" + done_msg
         )
         os._exit(1)
 
@@ -510,38 +519,63 @@ def configure_admin_settings():
 # ---------------------------------------------------------------------------
 # Update Check
 # ---------------------------------------------------------------------------
-def check_for_updates(manifest):
-    if not manifest:
-        return
+def find_available_update(manifest):
+    """
+    Returns (build_dict, installed_version, extra_headers) when a newer version
+    of the installed build is published, otherwise None.
 
+    The admin build is only checked when an admin URL + token are configured
+    and the admin build is the one installed.
+    """
     build_id, installed_version = get_installed_info()
     if not build_id or not installed_version:
-        return
+        return None
 
-    if build_id == 'cordcutter_admin':
-        return
+    if build_id == updates.ADMIN_BUILD_ID:
+        admin_build, admin_token = updates.get_admin_build(manifest)
+        if not admin_build or not admin_build.get('version_known'):
+            return None
+        if updates.is_newer(admin_build['version'], installed_version):
+            return admin_build, installed_version, {'Authorization': f'Bearer {admin_token}'}
+        return None
 
+    if not manifest:
+        return None
     builds        = manifest.get('builds', [])
     current_build = next((b for b in builds if b['id'] == build_id), None)
     if not current_build:
+        return None
+    if updates.is_newer(current_build.get('version', ''), installed_version):
+        return current_build, installed_version, None
+    return None
+
+
+def check_for_updates(manifest, ask=True):
+    found = find_available_update(manifest)
+    if not found:
+        if not ask:
+            xbmcgui.Dialog().ok("No Update Available",
+                                "Your build is already up to date.")
         return
 
-    latest_version = current_build.get('version', '')
-    if latest_version and latest_version != installed_version:
-        if xbmcgui.Dialog().yesno(
-            "Update Available",
-            f"A new version of [B]{current_build['name']}[/B] is available!\n\n"
-            f"  Installed : v{installed_version}\n"
-            f"  Available : v{latest_version}\n\n"
-            "Would you like to update now?"
-        ):
-            install_build(
-                url            = current_build['download_url'],
-                name           = current_build['name'],
-                version        = latest_version,
-                build_id       = build_id,
-                firstrun_steps = current_build.get('firstrun_steps')
-            )
+    build, installed_version, extra_headers = found
+    if ask and not xbmcgui.Dialog().yesno(
+        "Update Available",
+        f"A new version of [B]{build['name']}[/B] is available!\n\n"
+        f"  Installed : v{installed_version}\n"
+        f"  Available : v{build['version']}\n\n"
+        "Would you like to update now?"
+    ):
+        return
+
+    install_build(
+        url            = build['download_url'],
+        name           = build['name'],
+        version        = build['version'],
+        build_id       = build['id'],
+        firstrun_steps = build.get('firstrun_steps'),
+        extra_headers  = extra_headers
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -550,17 +584,13 @@ def check_for_updates(manifest):
 def main_menu():
     manifest = get_json(MANIFEST_URL)
 
-    admin_url, admin_token = load_admin_settings()
-    admin_build = None
-    if admin_url:
-        admin_build = {
-            'id':             'cordcutter_admin',
-            'name':           'CordCutter Admin',
-            'description':    'Personal admin build with pre-configured accounts.',
-            'version':        '1.0',
-            'size_mb':        0,
-            'firstrun_steps': ['device_name', 'iptv_sync', 'buffer'],
-        }
+    # Launched from the service's "Update Available" prompt:
+    # plugin://plugin.program.cutcablewizard/?action=update
+    if 'action=update' in ' '.join(sys.argv[1:]):
+        check_for_updates(manifest, ask=False)
+        return
+
+    admin_build, admin_token = updates.get_admin_build(manifest)
 
     options = ["Install Build", "Fresh Start", "First Run Setup", "Admin Settings"]
     choice  = xbmcgui.Dialog().select("CutCable Wizard", options)
@@ -596,9 +626,9 @@ def main_menu():
         sel = xbmcgui.Dialog().select("CutCable Wizard", items, useDetails=True)
         if sel != -1:
             selected       = builds[sel]
-            is_admin_build = selected['id'] == 'cordcutter_admin'
+            is_admin_build = selected['id'] == updates.ADMIN_BUILD_ID
             install_build(
-                url            = admin_url if is_admin_build else selected['download_url'],
+                url            = selected['download_url'],
                 name           = selected['name'],
                 version        = selected['version'],
                 build_id       = selected['id'],
