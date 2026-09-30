@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
     Publishes a CordCutter build update: uploads the zip to the GitHub "Builds"
-    release and updates version, download_url, size_mb and changelog in builds.json.
+    release and updates version, download_url, size_mb, sha256 and changelog in builds.json.
 
 .DESCRIPTION
     Order of operations (nothing in builds.json changes unless the upload succeeds):
@@ -203,6 +203,7 @@ $zipItem  = Get-Item -LiteralPath $Zip
 $zipName  = $zipItem.Name
 if ($zipName -notmatch '\.zip$') { Fail "$zipName is not a .zip file." }
 $sizeMb   = [int][Math]::Round($zipItem.Length / 1MB)
+$sha256   = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipItem.FullName).Hash.ToLower()
 $nameParts = Split-AssetName $zipName
 $zipPrefix = $nameParts[0]; $zipVersion = $nameParts[1]
 
@@ -286,6 +287,7 @@ Write-Host ""
 Write-Host "Build        : $($build.name) ($($build.id))"
 Write-Host "Version      : $($build.version)  ->  $Version"
 Write-Host "Size         : $($build.size_mb) MB  ->  $sizeMb MB"
+Write-Host "SHA-256      : $sha256"
 Write-Host "Upload       : $zipName  ->  release '$Tag'$(if ($existing.Count) { '  (REPLACING existing file)' })"
 Write-Host "download_url : $downloadUrl"
 if ($keepChangelog) { Write-Host "Changelog    : (unchanged)" }
@@ -337,6 +339,12 @@ foreach ($key in $fields.Keys) {
     if ($null -eq $new) { Fail "Field '$key' not found for $($build.id) in builds.json. Update it by hand." }
     $block = $new
 }
+# SHA-256 lets the wizard verify the download before installing
+$new = Set-JsonField $block 'sha256' (ConvertTo-JsonString $sha256)
+if ($null -eq $new) { $new = Add-JsonFieldAfterVersion $block 'sha256' (ConvertTo-JsonString $sha256) $nl }
+if ($null -eq $new) { Fail "Couldn't record the SHA-256 for $($build.id). Update it by hand: $sha256" }
+$block = $new
+
 if (-not $keepChangelog) {
     $raw = ConvertTo-JsonString $Changelog
     $new = Set-JsonField $block 'changelog' $raw
@@ -351,6 +359,7 @@ $newText = $manifestText.Substring(0, $loc[0]) + $block + $manifestText.Substrin
 try { $check = ($newText | ConvertFrom-Json).builds | Where-Object { $_.id -eq $build.id } }
 catch { Fail "The edited builds.json would not be valid JSON; nothing was written. ($_)" }
 if ($check.version -ne $Version -or $check.download_url -ne $downloadUrl -or [int]$check.size_mb -ne $sizeMb -or
+    $check.sha256 -ne $sha256 -or
     (-not $keepChangelog -and $check.changelog -ne ($Changelog -replace "`r`n", "`n"))) {
     Fail "The edited builds.json didn't read back as expected; nothing was written."
 }
@@ -373,10 +382,22 @@ if ($Push) {
     Write-Host "Next: commit and push builds.json (e.g. in GitHub Desktop)." -ForegroundColor Green
 }
 
+# ---------------------------------------------------------------------------
+# 8. Remove older copies of this build from the release
+# ---------------------------------------------------------------------------
+# Keeps the new file and the one it replaced (devices can see the previous
+# builds.json for a few minutes) and deletes anything older for this build.
 $oldFile = ($build.download_url -split '/')[-1]
+$prefix  = (Split-AssetName $zipName)[0]
+$older   = @((Get-ReleaseAssets).assets | Where-Object {
+    $_.name -ne $zipName -and $_.name -ne $oldFile -and $_.name -match '\.zip$' -and
+    (Split-AssetName $_.name)[0] -eq $prefix
+})
+foreach ($a in $older) {
+    $r = Invoke-Gh @('release', 'delete-asset', $Tag, $a.name, '--repo', $Repo, '--yes')
+    if ($r.Code -eq 0) { Write-Host "Removed older copy: $($a.name)" -ForegroundColor DarkGray }
+    else { Warn "Could not remove $($a.name): $($r.Out)" }
+}
 if ($oldFile -ne $zipName) {
-    Write-Host ""
-    Write-Host "The previous file ($oldFile) is still in the release. Once the push has been live for" -ForegroundColor DarkGray
-    Write-Host "about 10 minutes you can delete it on GitHub, or run:" -ForegroundColor DarkGray
-    Write-Host "    gh release delete-asset $Tag $oldFile --repo $Repo" -ForegroundColor DarkGray
+    Write-Host "Kept the previous file ($oldFile) for now; it is removed automatically on your next publish of this build." -ForegroundColor DarkGray
 }

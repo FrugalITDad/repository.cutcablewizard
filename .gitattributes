@@ -1,0 +1,16 @@
+# Kodi reads the repository files byte-for-byte (addons.xml is checked against
+# addons.xml.md5), so keep LF line endings in the repo AND on disk. Without this,
+# Git on Windows converts line endings and the checksum stops matching what
+# GitHub serves.
+* text=auto eol=lf
+
+# Windows scripts need CRLF to run reliably
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Never convert binary files or checksums
+*.zip binary
+*.png binary
+*.jpg binary
+*.md5 -text

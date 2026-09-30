@@ -1,5 +1,5 @@
-import xbmc, xbmcgui, xbmcaddon, os, sys, shutil, urllib.request, json, ssl, zipfile, xbmcvfs, re
-from resources.lib import updates, buildtools, binaries
+import xbmc, xbmcgui, xbmcaddon, os, sys, shutil, hashlib, urllib.request, json, ssl, zipfile, xbmcvfs, re
+from resources.lib import updates, buildtools, binaries, transfer
 
 # ---------------------------------------------------------------------------
 # Addon Constants
@@ -73,7 +73,7 @@ def resolve_github_release_url(url, token):
     the browser URL with a token — they must go through the API.
 
     Parses: https://github.com/OWNER/REPO/releases/download/TAG/FILENAME
-    Returns: (api_asset_url, headers) or raises an exception on failure.
+    Returns: (api_asset_url, headers, sha256_or_None) or raises an exception on failure.
     """
     m = re.match(
         r'https://github\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/(.+)',
@@ -81,7 +81,7 @@ def resolve_github_release_url(url, token):
     )
     if not m:
         return url, {'Authorization': f'Bearer {token}', 'User-Agent': 'Kodi-Wizard',
-                     'Accept': 'application/octet-stream'}
+                     'Accept': 'application/octet-stream'}, None
 
     owner, repo, tag, filename = m.groups()
     xbmc.log(f"[CutCableWizard] Resolving GitHub release asset: {owner}/{repo}@{tag}/{filename}", xbmc.LOGINFO)
@@ -103,8 +103,11 @@ def resolve_github_release_url(url, token):
         'User-Agent':           'Kodi-Wizard',
         'X-GitHub-Api-Version': '2022-11-28'
     }
+    # GitHub publishes a SHA-256 for each release file ("digest": "sha256:<hex>")
+    digest = str(asset.get('digest') or '')
+    sha256 = digest.split(':', 1)[1].lower() if digest.lower().startswith('sha256:') else None
     xbmc.log(f"[CutCableWizard] Resolved asset ID {asset['id']} — downloading via API.", xbmc.LOGINFO)
-    return asset_api_url, dl_headers
+    return asset_api_url, dl_headers, sha256
 
 
 # Admin credentials live in resources/lib/updates.py so the service can use them too.
@@ -167,33 +170,34 @@ def smart_fresh_start(manifest):
 
     zip_path = os.path.join(HOME, "freshstart.zip")
     admin_config = None
+    wiped        = False
     dp = xbmcgui.DialogProgress()
     dp.create("Fresh Start", "Downloading clean slate...")
 
+    def dl_progress(done, total, note):
+        dp.update(int(done * 100 / total) if total else 0, note or "Downloading clean slate...")
+        return not dp.iscanceled()
+
     try:
-        context = updates.ssl_context()
-        with urllib.request.urlopen(fresh_build['download_url'], context=context) as r, \
-             open(zip_path, 'wb') as f:
-            total = int(r.info().get('Content-Length', 0))
-            count = 0
-            while True:
-                chunk = r.read(262144)
-                if not chunk:
-                    break
-                f.write(chunk)
-                count += len(chunk)
-                if total > 0:
-                    dp.update(int(count * 100 / total), "Downloading clean slate...")
-                if dp.iscanceled():
-                    dp.close()
-                    if os.path.exists(zip_path):
-                        os.remove(zip_path)
-                    return False
+        try:
+            part, got_sha256 = transfer.download(
+                fresh_build['download_url'], zip_path,
+                key=f"freshstart|{fresh_build.get('version')}|{fresh_build['download_url']}",
+                headers={'User-Agent': 'Kodi-Wizard'}, progress=dl_progress)
+        except transfer.DownloadCancelled:
+            dp.close()
+            return False
 
         dp.update(0, "Verifying download...")
-        with zipfile.ZipFile(zip_path, 'r') as zf:
+        expected = (fresh_build.get('sha256') or '').lower()
+        if expected and got_sha256 != expected:
+            transfer.discard(zip_path)
+            raise ValueError("The download doesn't match the published checksum (SHA-256), "
+                             "so it was not used. Please try again.")
+        with zipfile.ZipFile(part, 'r') as zf:
             bad_file = zf.testzip()
         if bad_file:
+            transfer.discard(zip_path)
             raise zipfile.BadZipFile(f"Corrupt file in zip: {bad_file}")
 
         dp.update(0, "Wiping Kodi...")
@@ -201,38 +205,40 @@ def smart_fresh_start(manifest):
         # older wizard inside the clean-slate zip replace this one.
         admin_config = updates.backup_admin_config()
         updates.stash_running_wizard()
+        wiped = True
         wipe_kodi()
 
-        dp.update(0, "Restoring clean slate...")
-        with zipfile.ZipFile(zip_path, 'r') as zf:
-            files       = zf.infolist()
-            total_files = len(files)
-            for i, zipped_file in enumerate(files):
-                if i % 100 == 0:
-                    dp.update(
-                        int(i * 100 / total_files),
-                        f"Restoring: {zipped_file.filename[:35]}"
-                    )
-                zf.extract(zipped_file, HOME)
+        while True:
+            dp.update(0, "Restoring clean slate...")
+            try:
+                transfer.extract(part, HOME, progress=lambda i, t, n: dp.update(
+                    int(i * 100 / t) if t else 0, f"Restoring: {n[:35]}"))
+                break
+            except transfer.ExtractError as ex:
+                dp.close()
+                if not xbmcgui.Dialog().yesno(
+                        "Extraction Problem",
+                        f"Unpacking stopped: {ex}\n\nTry again?"):
+                    raise ValueError(f"Unpacking stopped: {ex}")
+                dp = xbmcgui.DialogProgress()
+                dp.create("Fresh Start", "Restoring clean slate...")
 
         updates.restore_admin_config(admin_config)
         updates.restore_newest_wizard()
 
         dp.close()
-        if os.path.exists(zip_path):
-            os.remove(zip_path)
+        transfer.finish(zip_path)
         return True
 
     except Exception as e:
         dp.close()
-        if os.path.exists(zip_path):
-            os.remove(zip_path)
         updates.restore_admin_config(admin_config)   # no-op if nothing was saved
         updates.restore_newest_wizard()
         xbmcgui.Dialog().ok(
             "Fresh Start Error",
             f"Fresh Start failed:\n\n{updates.CERT_ERROR_HELP if updates.is_cert_error(e) else str(e)}\n\n"
-            "Your existing setup has not been modified."
+            + ("Kodi had already been cleared. Your admin settings were kept; please run "
+               "Fresh Start again." if wiped else "Your existing setup has not been modified.")
         )
         return False
 
@@ -240,9 +246,40 @@ def smart_fresh_start(manifest):
 # ---------------------------------------------------------------------------
 # Build Installation
 # ---------------------------------------------------------------------------
+def _folder_size(path):
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total
+
+
+def has_room_for(size_mb):
+    """
+    Rough check that the download (size_mb) plus the unpacked build fit,
+    counting the space the current build frees when it is wiped.
+    Returns (ok, free_mb, need_mb).
+    """
+    if not size_mb:
+        return True, 0, 0
+    try:
+        free_mb = shutil.disk_usage(HOME).free / 1048576.0
+        current = sum(_folder_size(os.path.join(HOME, d)) for d in ('addons', 'userdata')) / 1048576.0
+    except Exception:
+        return True, 0, 0
+    need_download = size_mb + 50
+    need_total    = size_mb * 2.8 + 150 - current * 0.9     # zip + ~1.8x unpacked
+    need_mb       = max(need_download, need_total)
+    return free_mb >= need_mb, int(free_mb), int(need_mb)
+
+
 def install_build(url, name, version, build_id,
-                  firstrun_steps=None, extra_headers=None):
+                  firstrun_steps=None, extra_headers=None, sha256=None, size_mb=0):
     zip_path = os.path.join(HOME, "build.zip")
+    expected_sha256 = (sha256 or '').lower() or None
 
     installed_id, installed_version = get_installed_info()
 
@@ -265,12 +302,30 @@ def install_build(url, name, version, build_id,
         ):
             return
 
+    ok, free_mb, need_mb = has_room_for(size_mb)
+    if not ok and not xbmcgui.Dialog().yesno(
+        "Low Storage",
+        f"[B]{name}[/B] needs about {need_mb} MB free to download and install, and this "
+        f"device has {free_mb} MB free.\n\n"
+        "Clearing space first is recommended (e.g. uninstall unused apps, or clear "
+        "Kodi's cache with EZ Maintenance+). Try anyway?"
+    ):
+        return
+
     admin_config = None
+    wiped        = False
     dp = xbmcgui.DialogProgress()
     dp.create("CordCutter Wizard", f"Downloading {name}...")
 
+    def dl_progress(done, total, note):
+        if note:
+            dp.update(int(done * 100 / total) if total else 0, note)
+        elif total:
+            dp.update(int(done * 100 / total),
+                      f"Downloading {name}...  {done // 1048576} of {total // 1048576} MB")
+        return not dp.iscanceled()
+
     try:
-        context = updates.ssl_context()
         headers = {'User-Agent': 'Kodi-Wizard', 'Accept': 'application/octet-stream'}
         if extra_headers:
             headers.update(extra_headers)
@@ -281,7 +336,8 @@ def install_build(url, name, version, build_id,
         bearer_token = (extra_headers or {}).get('Authorization', '').replace('Bearer ', '')
         if bearer_token and 'github.com' in url and '/releases/download/' in url:
             try:
-                download_url, headers = resolve_github_release_url(url, bearer_token)
+                download_url, headers, asset_sha256 = resolve_github_release_url(url, bearer_token)
+                expected_sha256 = expected_sha256 or asset_sha256
             except Exception as resolve_err:
                 dp.close()
                 xbmcgui.Dialog().ok(
@@ -291,10 +347,16 @@ def install_build(url, name, version, build_id,
                 )
                 return
 
+        # Resumes after a dropped connection; keeps the file if the install
+        # fails later so running it again doesn't download everything again.
         xbmc.log(f"[CutCableWizard] Downloading: {download_url[:80]}", xbmc.LOGINFO)
         try:
-            req = urllib.request.Request(download_url, headers=headers)
-            r   = urllib.request.urlopen(req, context=context)
+            zip_path, got_sha256 = transfer.download(
+                download_url, zip_path, key=f"{build_id}|{version}|{url}",
+                headers=headers, progress=dl_progress)
+        except transfer.DownloadCancelled:
+            dp.close()
+            return
         except urllib.error.HTTPError as http_err:
             dp.close()
             xbmc.log(f"[CutCableWizard] Download HTTP {http_err.code}: {url}", xbmc.LOGWARNING)
@@ -308,27 +370,21 @@ def install_build(url, name, version, build_id,
                 "  - The token has not expired"
             )
             return
-        with r, open(zip_path, 'wb') as f:
-            total = int(r.info().get('Content-Length', 0))
-            count = 0
-            while True:
-                chunk = r.read(262144)
-                if not chunk:
-                    break
-                f.write(chunk)
-                count += len(chunk)
-                if total > 0:
-                    dp.update(int(count * 100 / total), f"Downloading {name}...")
-                if dp.iscanceled():
-                    if os.path.exists(zip_path):
-                        os.remove(zip_path)
-                    dp.close()
-                    return
 
         dp.update(0, "Verifying download...")
+        if expected_sha256:
+            if got_sha256 != expected_sha256:
+                transfer.discard(os.path.join(HOME, "build.zip"))
+                raise ValueError("The download doesn't match the published checksum (SHA-256), "
+                                 "so it was not installed. Please try again.")
+            xbmc.log(f"[CutCableWizard] {name} v{version}: SHA-256 verified.", xbmc.LOGINFO)
+        else:
+            xbmc.log(f"[CutCableWizard] {name} v{version}: no published SHA-256; "
+                     "relying on zip CRC check.", xbmc.LOGINFO)
         with zipfile.ZipFile(zip_path, 'r') as zf:
             bad_file = zf.testzip()
         if bad_file:
+            transfer.discard(os.path.join(HOME, "build.zip"))
             raise zipfile.BadZipFile(f"Corrupt file in zip: {bad_file}")
 
         # Different kind of device than the Fire TV the build was made on?
@@ -344,21 +400,26 @@ def install_build(url, name, version, build_id,
         if is_update:
             dp.update(0, "Saving your current setup settings...")
             keep_state = updates.snapshot_user_settings(carried)
+        wiped = True
         wipe_kodi()
 
-        dp.update(0, "Extracting build files...")
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            files       = zf.infolist()
-            total_files = len(files)
-            for i, zipped_file in enumerate(files):
-                if i % 300 == 0:
-                    dp.update(
-                        int(i * 100 / total_files),
-                        f"Extracting: {zipped_file.filename[:35]}"
-                    )
-                if skip_prefixes and zipped_file.filename.startswith(skip_prefixes):
-                    continue            # replaced by this device's version below
-                zf.extract(zipped_file, HOME)
+        # Unpack; on a problem, offer to retry from the file already downloaded
+        while True:
+            dp.update(0, "Extracting build files...")
+            try:
+                transfer.extract(zip_path, HOME, skip_prefixes, progress=lambda i, t, n: dp.update(
+                    int(i * 100 / t) if t else 0, f"Extracting: {n[:35]}"))
+                break
+            except transfer.ExtractError as ex:
+                xbmc.log(f"[CutCableWizard] Extraction failed: {ex}", xbmc.LOGWARNING)
+                dp.close()
+                if not xbmcgui.Dialog().yesno(
+                        "Extraction Problem",
+                        f"Unpacking stopped: {ex}\n\n"
+                        "Try again? (The download is kept, so nothing is downloaded again.)"):
+                    raise ValueError(f"Unpacking stopped: {ex}")
+                dp = xbmcgui.DialogProgress()
+                dp.create("CordCutter Wizard", "Extracting build files...")
 
         if replacements:
             dp.update(100, "Installing add-ons for this device...")
@@ -387,8 +448,7 @@ def install_build(url, name, version, build_id,
                     f.write(','.join(steps_to_run))
 
         dp.close()
-        if os.path.exists(zip_path):
-            os.remove(zip_path)
+        transfer.finish(os.path.join(HOME, "build.zip"))
 
         if keep_state is None:
             done_msg = ("[B]IMPORTANT:[/B] After you re-open Kodi, please wait "
@@ -412,15 +472,16 @@ def install_build(url, name, version, build_id,
 
     except Exception as e:
         dp.close()
-        if os.path.exists(zip_path):
-            os.remove(zip_path)
+        # The downloaded file is kept (unless it was bad) so a retry is quick.
         updates.restore_admin_config(admin_config)   # no-op if nothing was saved
         updates.restore_newest_wizard()
         binaries.cleanup()
         xbmcgui.Dialog().ok(
             "Installation Error",
             f"Installation failed:\n\n{updates.CERT_ERROR_HELP if updates.is_cert_error(e) else str(e)}\n\n"
-            "Your existing setup has not been modified."
+            + ("The previous setup had already been removed. Your admin settings were kept; "
+               "please run the install again." if wiped else
+               "Your existing setup has not been modified.")
         )
 
 
@@ -635,7 +696,9 @@ def check_for_updates(manifest, ask=True):
         version        = build['version'],
         build_id       = build['id'],
         firstrun_steps = build.get('firstrun_steps'),
-        extra_headers  = extra_headers
+        extra_headers  = extra_headers,
+        sha256         = build.get('sha256'),
+        size_mb        = build.get('size_mb', 0)
     )
 
 
@@ -725,7 +788,9 @@ def main_menu():
                 build_id       = selected['id'],
                 firstrun_steps = selected.get('firstrun_steps'),
                 extra_headers  = {'Authorization': f'Bearer {admin_token}'}
-                                 if is_admin_build else None
+                                 if is_admin_build else None,
+                sha256         = selected.get('sha256'),
+                size_mb        = selected.get('size_mb', 0)
             )
 
     elif choice == 1:

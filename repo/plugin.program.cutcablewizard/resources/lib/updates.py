@@ -240,6 +240,20 @@ CERT_ERROR_HELP = ("The secure connection to GitHub could not be verified, so no
                    "time being wrong. Check Settings > Date & Time and try again.")
 
 
+def make_request(url, headers=None, **kwargs):
+    """
+    urllib Request whose Authorization header is sent ONLY to the host in
+    `url`. By default urllib copies it onto redirects (e.g. from GitHub to its
+    file-storage host), which would hand the token to a second server.
+    """
+    headers = dict(headers or {})
+    auth = headers.pop('Authorization', None)
+    req = urllib.request.Request(url, headers=headers, **kwargs)
+    if auth:
+        req.add_unredirected_header('Authorization', auth)
+    return req
+
+
 def github_api_request(api_url, token):
     context = ssl_context()
     headers = {
@@ -248,7 +262,7 @@ def github_api_request(api_url, token):
         'User-Agent':           'Kodi-Wizard',
         'X-GitHub-Api-Version': '2022-11-28'
     }
-    req = urllib.request.Request(api_url, headers=headers)
+    req = make_request(api_url, headers)
     with urllib.request.urlopen(req, context=context, timeout=15) as r:
         return json.loads(r.read().decode('utf-8'))
 
@@ -308,6 +322,9 @@ def find_latest_admin_release(admin_url, token):
                     'tag':          rel.get('tag_name'),
                     # Release notes double as the admin build's changelog
                     'changelog':    (rel.get('body') or '').strip(),
+                    # GitHub's own SHA-256 of the file ("sha256:<hex>"), if provided
+                    'sha256':       (str(a.get('digest') or '').split(':', 1)[1].lower()
+                                     if str(a.get('digest') or '').lower().startswith('sha256:') else None),
                 }
     return best
 
@@ -338,10 +355,11 @@ def get_admin_build(manifest=None):
     if latest:
         version, dl_url, size = latest['version'], latest['download_url'], latest['size_mb']
         changelog = latest.get('changelog', '')
+        sha256    = latest.get('sha256')
     else:
         m = _RELEASE_URL_RE.match(url)
         version = (_asset_key(m.group(4))[1] if m else None) or '1.0'
-        dl_url, size, changelog = url, 0, ''
+        dl_url, size, changelog, sha256 = url, 0, '', None
 
     return {
         'id':             ADMIN_BUILD_ID,
@@ -352,6 +370,7 @@ def get_admin_build(manifest=None):
         'size_mb':        size,
         'firstrun_steps': steps,
         'changelog':      changelog,
+        'sha256':         sha256,
         'version_known':  latest is not None,
     }, token
 

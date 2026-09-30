@@ -17,7 +17,7 @@ Security:
   - Public builds leave out the personal-data folders you choose (logins,
     weather location, ...) and have the device name reset.
 """
-import os, re, io, json, ssl, time, base64, shutil, zipfile, urllib.request, urllib.parse
+import os, re, io, json, ssl, time, base64, shutil, zipfile, hashlib, urllib.request, urllib.parse
 import xbmc, xbmcgui, xbmcvfs
 
 from resources.lib import updates
@@ -44,6 +44,24 @@ DEFAULT_PERSONAL_ADDON_DATA = [
     'weather.multi', 'script.simkl', 'plugin.video.jellycon',
     'plugin.program.iagl', 'script.trakt',
 ]
+
+# Guide data and caches that are rebuilt on the device anyway (by the Live TV
+# guide sync that runs in First Run Setup and after every update). Leaving
+# them out makes builds ~35-40% smaller. Configuration is kept: IPTV Merge's
+# data.db (your sources), every settings.xml, and all other add-on data.
+REGENERATED_DATA = [re.compile(p) for p in (
+    r'^userdata/addon_data/plugin\.program\.iptv\.merge/(epg\.xml|playlist\.m3u8)$',
+    r'^userdata/addon_data/metalchris\.[^/]+/(thumbs|cache)/',
+    r'^userdata/addon_data/plugin\.video\.jet_guide/[^/]*cache[^/]*\.(json|txt)$',   # caches + their timestamps
+    r'^userdata/addon_data/plugin\.video\.jet_guide/debug_log\.txt$',
+    # Tied to the Fire TV the build was made on, or to your own viewing
+    r'^userdata/addon_data/plugin\.video\.jet_guide/(device_uuid\.txt|last_watched\.json|reminders\.json)$',
+)]
+
+
+def is_regenerated(rel):
+    return any(p.search(rel) for p in REGENERATED_DATA)
+
 
 # Already-compressed files are stored, everything else deflated (faster on Fire TV)
 STORE_EXT = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.zip', '.gz', '.7z', '.xbt',
@@ -108,7 +126,7 @@ def gh(method, url, token, data=None, body=None, headers=None, timeout=60):
         hdrs['Content-Type'] = 'application/json'
     if headers:
         hdrs.update(headers)
-    req = urllib.request.Request(url, data=body, headers=hdrs, method=method)
+    req = updates.make_request(url, hdrs, data=body, method=method)
     try:
         with urllib.request.urlopen(req, context=_ctx(), timeout=timeout) as r:
             raw = r.read()
@@ -224,7 +242,7 @@ def _set_field(block, key, raw):
     return pat.sub(lambda m: m.group(1) + raw, block, count=1)
 
 
-def edit_manifest_text(text, build_id, version, url, size_mb, changelog):
+def edit_manifest_text(text, build_id, version, url, size_mb, changelog, sha256=None):
     loc = _find_build_block(text, build_id)
     if not loc:
         raise PublishError(f"'{build_id}' was not found in builds.json.")
@@ -237,14 +255,18 @@ def edit_manifest_text(text, build_id, version, url, size_mb, changelog):
         if new is None:
             raise PublishError(f"Field '{key}' missing for '{build_id}' in builds.json.")
         block = new
+    extra = []
     if changelog:
-        raw = json.dumps(changelog, ensure_ascii=False)
-        new = _set_field(block, 'changelog', raw)
+        extra.append(('changelog', json.dumps(changelog, ensure_ascii=False)))
+    if sha256:
+        extra.append(('sha256', json.dumps(sha256)))
+    for key, raw in extra:
+        new = _set_field(block, key, raw)
         if new is None:
-            m = re.search(r'(?m)^([ \t]*)"version"\s*:\s*"(?:[^"\\]|\\.)*"', block)
+            m = re.search(r'(?m)^([ \t]*)"size_mb"\s*:\s*-?\d+(?:\.\d+)?', block)
             if not m:
-                raise PublishError("Could not add the changelog to builds.json.")
-            new = block[:m.end()] + f',{nl}{m.group(1)}"changelog": {raw}' + block[m.end():]
+                raise PublishError(f"Could not add {key} to builds.json.")
+            new = block[:m.end()] + f',{nl}{m.group(1)}"{key}": {raw}' + block[m.end():]
         block = new
     out = text[:loc[0]] + block + text[loc[1]:]
 
@@ -252,19 +274,20 @@ def edit_manifest_text(text, build_id, version, url, size_mb, changelog):
     entry = next(b for b in json.loads(out)['builds'] if b.get('id') == build_id)
     if (entry.get('version') != version or entry.get('download_url') != url or
             int(entry.get('size_mb', -1)) != int(size_mb) or
-            (changelog and entry.get('changelog') != changelog)):
+            (changelog and entry.get('changelog') != changelog) or
+            (sha256 and entry.get('sha256') != sha256)):
         raise PublishError("builds.json did not read back as expected; not saved.")
     return out
 
 
-def update_manifest_on_github(token, build_id, version, url, size_mb, changelog, name):
+def update_manifest_on_github(token, build_id, version, url, size_mb, changelog, name, sha256=None):
     m = _RAW_URL_RE.match(MANIFEST_URL)
     owner, repo, branch, path = m.groups()
     api = f"{API}/repos/{owner}/{repo}/contents/{path}"
     for attempt in range(2):                  # retry once if main moved underneath us
         meta = gh('GET', f"{api}?ref={branch}", token)
         text = base64.b64decode(meta['content']).decode('utf-8')
-        new  = edit_manifest_text(text, build_id, version, url, size_mb, changelog)
+        new  = edit_manifest_text(text, build_id, version, url, size_mb, changelog, sha256)
         try:
             gh('PUT', api, token, data={
                 'message': f"Publish {name} v{version}",
@@ -303,8 +326,14 @@ def list_addon_data():
     return out
 
 
-def collect(excluded_addon_data):
-    """Walks addons/ and userdata/. Returns (dirs, files[(abs, rel, size)], total_bytes)."""
+def collect(excluded_addon_data, stats=None):
+    """
+    Walks addons/ and userdata/. Returns (dirs, files[(abs, rel, size)], total_bytes).
+    If a dict is passed as stats, it receives the count/bytes of regenerated
+    guide data that was left out.
+    """
+    if stats is not None:
+        stats.update(skipped_files=0, skipped_bytes=0)
     excluded_prefixes = ALWAYS_EXCLUDE + tuple(
         f'userdata/addon_data/{n}/' for n in excluded_addon_data)
     dirs, files, total = [], [], 0
@@ -337,6 +366,11 @@ def collect(excluded_addon_data):
                 try:
                     size = os.path.getsize(full)
                 except OSError:
+                    continue
+                if is_regenerated(rel):
+                    if stats is not None:
+                        stats['skipped_files'] += 1
+                        stats['skipped_bytes'] += size
                     continue
                 files.append((full, rel, size))
                 total += size
@@ -394,6 +428,62 @@ def make_zip(zip_path, dirs, files, total, public, progress=None):
     if skipped:
         log(f"Skipped {len(skipped)} files that disappeared while packaging: {skipped[:5]}")
     return os.path.getsize(zip_path)
+
+
+# ---------------------------------------------------------------------------
+# Clean-up of older build files
+# ---------------------------------------------------------------------------
+# After a publish we keep the new file AND the one it replaced (devices can
+# see the old builds.json for a few minutes), and delete anything older for
+# that same build. Only files whose name matches this build's pattern are
+# touched, so other builds in the same release are never affected.
+def cleanup_public_release(repo, tag, token, new_name, replaced_name):
+    prefix  = updates._asset_key(new_name)[0]
+    release = get_release_by_tag(repo, tag, token)
+    removed = []
+    for a in release.get('assets', []):
+        name = a.get('name', '')
+        if name in (new_name, replaced_name) or not name.lower().endswith('.zip'):
+            continue
+        if updates._asset_key(name)[0] != prefix:
+            continue
+        gh('DELETE', a['url'], token)
+        removed.append(name)
+    return removed
+
+
+def cleanup_admin_releases(repo, token, new_name, keep=2):
+    """
+    Admin builds get one release each. Keeps the newest `keep` releases for
+    this build and deletes older ones (release + tag). A release is only
+    touched if every zip in it belongs to this build.
+    """
+    prefix   = updates._asset_key(new_name)[0]
+    releases = gh('GET', f"{API}/repos/{repo}/releases?per_page=100", token) or []
+    mine = []
+    for rel in releases:
+        zips = [a['name'] for a in rel.get('assets', []) if a.get('name', '').lower().endswith('.zip')]
+        if not zips or any(updates._asset_key(z)[0] != prefix for z in zips):
+            continue
+        ver = updates._asset_key(zips[0])[1] or str(rel.get('tag_name', '')).lstrip('vV')
+        mine.append((ver, rel))
+    ordered = []
+    for ver, rel in mine:                        # newest first
+        i = 0
+        while i < len(ordered) and not updates.is_newer(ver, ordered[i][0]):
+            i += 1
+        ordered.insert(i, (ver, rel))
+    removed = []
+    for ver, rel in ordered[keep:]:
+        gh('DELETE', rel['url'], token)
+        tag = rel.get('tag_name')
+        if tag:
+            try:
+                gh('DELETE', f"{API}/repos/{repo}/git/refs/tags/{urllib.parse.quote(tag)}", token)
+            except PublishError as e:
+                log(f"Could not delete tag {tag}: {e}", xbmc.LOGWARNING)
+        removed.append(rel.get('name') or tag)
+    return removed
 
 
 # ---------------------------------------------------------------------------
@@ -549,7 +639,8 @@ def package_and_publish(manifest):
     except Cancelled:
         return
 
-    dirs, files, total = collect(excluded)
+    stats = {}
+    dirs, files, total = collect(excluded, stats)
     free = shutil.disk_usage(HOME).free
     need = int(total * 0.85) + 100 * 1048576
     if free < need and not dialog.yesno(
@@ -561,6 +652,8 @@ def package_and_publish(manifest):
     summary = (f"[B]{t['name']} v{version}[/B]\n"
                f"File: {asset_name}\n"
                f"Contents: {len(files)} files, {_fmt_mb(total)} before compression\n"
+               + (f"Guide data rebuilt on the device (left out): {_fmt_mb(stats['skipped_bytes'])}\n"
+                  if stats.get('skipped_bytes') else "")
                + (f"Left out: {', '.join(excluded)}\n" if excluded else "")
                + ("Device name reset to 'Kodi'.\n" if t['public'] else
                   "[COLOR yellow]Admin build: logins are included; goes to your PRIVATE repo.[/COLOR]\n")
@@ -593,6 +686,11 @@ def package_and_publish(manifest):
         return
     dp.close()
     size_mb = int(round(zip_size / 1048576.0))
+    h = hashlib.sha256()
+    with open(zip_path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1048576), b''):
+            h.update(chunk)
+    zip_sha256 = h.hexdigest()
     log(f"Packaged {asset_name}: {size_mb} MB in {int(time.time() - started)}s")
 
     # ── Upload + record, with retry ──────────────────────────────────────
@@ -612,7 +710,7 @@ def package_and_publish(manifest):
                 dl_url  = f"https://github.com/{t['repo']}/releases/download/{t['tag']}/{asset_name}"
                 dp.update(100, "Updating builds.json...")
                 update_manifest_on_github(token, t['id'], version, dl_url, size_mb,
-                                          changelog, t['name'])
+                                          changelog, t['name'], zip_sha256)
             else:
                 tag = f"admin-{version}"
                 try:
@@ -647,14 +745,27 @@ def package_and_publish(manifest):
         except Exception:
             pass
 
-    old_file = t['file']
+    # Remove older copies of this build (never the new file or the one it replaced)
+    removed, cleanup_error = [], None
+    try:
+        if t['public']:
+            removed = cleanup_public_release(t['repo'], t['tag'], token, asset_name, t['file'])
+        else:
+            removed = cleanup_admin_releases(t['repo'], token, asset_name)
+    except Exception as e:
+        cleanup_error = str(e)
+        log(f"Clean-up of older build files failed: {e}", xbmc.LOGWARNING)
+    if removed:
+        log(f"Removed older build files: {removed}")
+    tidy = (f"\n\nRemoved older copies: {', '.join(removed)}" if removed else "") + \
+           ("\n\n(Could not remove older copies this time; they'll be tried again next publish.)"
+            if cleanup_error else "")
+
     if t['public']:
         msg = (f"[B]{t['name']} v{version}[/B] ({size_mb} MB) is uploaded and builds.json is updated.\n\n"
                "Devices will see the update within about 5 minutes.\n\n"
-               "On your PC, fetch/pull in GitHub Desktop before editing the repo again.")
-        if old_file != asset_name:
-            msg += f"\n\nAfter ~10 minutes you can delete the old [B]{old_file}[/B] from the release."
+               "On your PC, fetch/pull in GitHub Desktop before editing the repo again." + tidy)
     else:
         msg = (f"[B]{t['name']} v{version}[/B] ({size_mb} MB) is published to your private "
-               f"repo as release '{tag}'.\n\nAdmin devices will be offered it on their next check.")
+               f"repo as release '{tag}'.\n\nAdmin devices will be offered it on their next check." + tidy)
     dialog.ok("Publish Complete", msg)

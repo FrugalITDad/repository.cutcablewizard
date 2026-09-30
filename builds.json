@@ -7,6 +7,7 @@
       "version": "1.1.1",
       "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/Builds/cordcutter_base-build-1.1.1.zip",
       "size_mb": 273,
+      "sha256": "a27e35ac3a1abfb8253cb083fa4618666f08e9613d87ac6f3fbbcb51f42b54ed",
       "changelog": "Standard release with verified legal streaming sources and automatic guide sync.",
       "admin_only": false,
       "firstrun_steps": ["subtitles", "weather", "device_name", "iptv_sync", "buffer"]
@@ -18,6 +19,7 @@
       "version": "1.1.0",
       "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/Builds/cordcutter_plus-build-1.1.0.zip",
       "size_mb": 334,
+      "sha256": "a003da5b4a04a16b6b336a7e5189de4d43c44c9f5f371308b6c903af49700478",
       "changelog": "Plus release including 3rd party addons for expanded categories.",
       "admin_only": false,
       "firstrun_steps": ["subtitles", "weather", "device_name", "simkl", "iptv_sync", "buffer"]
@@ -29,6 +31,7 @@
       "version": "1.1.0",
       "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/Builds/cordcutter_plus_gaming-build-1.1.0.zip",
       "size_mb": 447,
+      "sha256": "10f917433bbf72525d4bf449e0974297890d875c56082e6c51b615d7e2a4bbc7",
       "changelog": "Plus Gaming release adding IAGL retro gaming integration via Archive.org.",
       "admin_only": false,
       "firstrun_steps": ["subtitles", "weather", "device_name", "simkl", "iagl", "iptv_sync", "buffer"]
@@ -40,6 +43,7 @@
       "version": "1.1.0",
       "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/Builds/cordcutter_pro-build-1.1.0.zip",
       "size_mb": 335,
+      "sha256": "5c30da94ed53fc7367b01f52c5fbafa661dbe5744940f06a0e4c7af7f67dc042",
       "changelog": "Pro release adding Jellyfin integration via JellyCon.",
       "admin_only": false,
       "firstrun_steps": ["subtitles", "weather", "device_name", "simkl", "jellycon", "iptv_sync", "buffer"]
@@ -51,6 +55,7 @@
       "version": "1.1.0",
       "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/Builds/cordcutter_pro_gaming-build-1.1.0.zip",
       "size_mb": 448,
+      "sha256": "750d906808743a991133f0a1a1c86d29614ae4b6c502fb84035ed6ba173b27e1",
       "changelog": "Pro Gaming release adding IAGL retro gaming integration via Archive.org.",
       "admin_only": false,
       "firstrun_steps": ["subtitles", "weather", "device_name", "simkl", "jellycon", "iagl", "iptv_sync", "buffer"]
@@ -61,7 +66,8 @@
       "description": "Clean slate restore with CutCableWizard, Unknown Sources enabled and Any Repositories set.",
       "version": "1.1.0",
       "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/Builds/cordcutter_freshstart-build-1.1.0.zip",
-      "size_mb": 3,
+      "size_mb": 4,
+      "sha256": "efc406f9b2aad8a495599fba89a4ebcc6a1107c27483db8da5b8c2a3bb9e0a9a",
       "changelog": "Internal clean slate build used by the Fresh Start function.",
       "admin_only": false
     }
