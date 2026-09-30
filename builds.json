@@ -64,11 +64,11 @@
       "id": "cordcutter_fresh_start",
       "name": "CordCutter Fresh Start",
       "description": "Clean slate restore with CutCableWizard, Unknown Sources enabled and Any Repositories set.",
-      "version": "1.1.0",
-      "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/Builds/cordcutter_freshstart-build-1.1.0.zip",
+      "version": "1.1.1",
+      "download_url": "https://github.com/FrugalITDad/repository.cutcablewizard/releases/download/Builds/cordcutter_freshstart-build-1.1.1.zip",
       "size_mb": 4,
-      "sha256": "efc406f9b2aad8a495599fba89a4ebcc6a1107c27483db8da5b8c2a3bb9e0a9a",
-      "changelog": "Internal clean slate build used by the Fresh Start function.",
+      "sha256": "ef569445944fd171a6ce66adc6468e313dbcc3ea97e16d8a6df768ae9cb07e9a",
+      "changelog": "Updated Wizard",
       "admin_only": false
     }
   ]
