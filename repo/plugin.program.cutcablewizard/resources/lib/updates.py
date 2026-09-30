@@ -220,6 +220,8 @@ def find_latest_admin_release(admin_url, token):
                     'download_url': a.get('browser_download_url'),
                     'size_mb':      int(round(a.get('size', 0) / 1048576.0)),
                     'tag':          rel.get('tag_name'),
+                    # Release notes double as the admin build's changelog
+                    'changelog':    (rel.get('body') or '').strip(),
                 }
     return best
 
@@ -249,10 +251,11 @@ def get_admin_build(manifest=None):
 
     if latest:
         version, dl_url, size = latest['version'], latest['download_url'], latest['size_mb']
+        changelog = latest.get('changelog', '')
     else:
         m = _RELEASE_URL_RE.match(url)
         version = (_asset_key(m.group(4))[1] if m else None) or '1.0'
-        dl_url, size = url, 0
+        dl_url, size, changelog = url, 0, ''
 
     return {
         'id':             ADMIN_BUILD_ID,
@@ -262,6 +265,7 @@ def get_admin_build(manifest=None):
         'download_url':   dl_url,
         'size_mb':        size,
         'firstrun_steps': steps,
+        'changelog':      changelog,
         'version_known':  latest is not None,
     }, token
 
@@ -470,3 +474,40 @@ def ask_snooze(build_id, version):
         log(f"Update {build_id} v{version} snoozed: {label}")
     except Exception as e:
         log(f"Could not save update reminder: {e}", xbmc.LOGWARNING)
+
+
+# ---------------------------------------------------------------------------
+# Update prompt (shared by the startup check and the wizard)
+# ---------------------------------------------------------------------------
+CHANGELOG_PREVIEW_CHARS = 160
+
+
+def prompt_update(name, installed, latest, changelog='', heading="Update Available",
+                  footer=""):
+    """
+    Asks whether to update, showing a short "What's new" preview. When there
+    is a changelog, a [What's New] button opens the full text and then
+    returns to the prompt. Returns True if the user chose to update.
+    """
+    changelog = (changelog or '').strip()
+    msg = (f"A new version of [B]{name}[/B] is available!\n"
+           f"Installed: v{installed}   Available: v{latest}\n")
+    if changelog:
+        preview = ' '.join(changelog.split())
+        if len(preview) > CHANGELOG_PREVIEW_CHARS:
+            preview = preview[:CHANGELOG_PREVIEW_CHARS].rsplit(' ', 1)[0] + '...'
+        msg += f"\n[B]What's new:[/B] {preview}\n"
+    msg += "\nWould you like to update now?" + (f"\n{footer}" if footer else "")
+
+    dialog = xbmcgui.Dialog()
+    if not changelog or not hasattr(dialog, 'yesnocustom'):
+        return bool(dialog.yesno(heading, msg))
+
+    while True:
+        # -1 = backed out, 0 = No, 1 = Yes, 2 = What's New
+        result = dialog.yesnocustom(heading, msg, "What's New",
+                                    nolabel="Not Now", yeslabel="Update")
+        if result == 2:
+            dialog.textviewer(f"What's new in {name} v{latest}", changelog)
+            continue
+        return result == 1

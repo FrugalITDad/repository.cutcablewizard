@@ -573,6 +573,7 @@ def run_update_check():
             return
         build_name     = updates.ADMIN_BUILD_NAME
         latest_version = latest['version']
+        changelog      = latest.get('changelog', '')
     else:
         manifest = get_json(MANIFEST_URL)
         if not manifest:
@@ -586,6 +587,7 @@ def run_update_check():
             return
         build_name     = current_build['name']
         latest_version = current_build.get('version', '')
+        changelog      = current_build.get('changelog', '')
 
     if not updates.is_newer(latest_version, installed_version):
         xbmc.log(f"[CutCableWizard] Update check: '{build_id}' is up to date (v{installed_version}).", xbmc.LOGINFO)
@@ -598,14 +600,9 @@ def run_update_check():
 
     xbmc.log(f"[CutCableWizard] Update available: {build_id} v{installed_version} -> v{latest_version}", xbmc.LOGINFO)
 
-    if xbmcgui.Dialog().yesno(
-        "Build Update Available",
-        f"A new version of [B]{build_name}[/B] is available!\n\n"
-        f"  Installed : v{installed_version}\n"
-        f"  Available : v{latest_version}\n\n"
-        "Would you like to update now?\n"
-        "(Your setup settings will be kept.)"
-    ):
+    if updates.prompt_update(build_name, installed_version, latest_version, changelog,
+                             heading="Build Update Available",
+                             footer="(Your setup settings will be kept.)"):
         # Goes straight to the update instead of the wizard's main menu.
         updates.clear_snooze()
         xbmc.executebuiltin("RunPlugin(plugin://plugin.program.cutcablewizard/?action=update)")

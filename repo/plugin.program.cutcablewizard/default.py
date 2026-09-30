@@ -565,13 +565,8 @@ def check_for_updates(manifest, ask=True):
         # still shows the update and Install Build still offers it.
         if updates.is_snoozed(build['id'], build['version']):
             return
-        if not xbmcgui.Dialog().yesno(
-            "Update Available",
-            f"A new version of [B]{build['name']}[/B] is available!\n\n"
-            f"  Installed : v{installed_version}\n"
-            f"  Available : v{build['version']}\n\n"
-            "Would you like to update now?"
-        ):
+        if not updates.prompt_update(build['name'], installed_version,
+                                     build['version'], build.get('changelog')):
             updates.ask_snooze(build['id'], build['version'])
             return
 
