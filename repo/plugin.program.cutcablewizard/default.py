@@ -1,4 +1,4 @@
-import xbmc, xbmcgui, xbmcaddon, os, sys, shutil, hashlib, urllib.request, json, ssl, zipfile, xbmcvfs, re
+import xbmc, xbmcgui, xbmcaddon, os, sys, shutil, urllib.request, urllib.error, json, zipfile, xbmcvfs, re
 from resources.lib import updates, buildtools, binaries, transfer
 
 # ---------------------------------------------------------------------------
@@ -9,8 +9,6 @@ ADDON_ID = ADDON.getAddonInfo('id')
 HOME     = xbmcvfs.translatePath("special://home/")
 
 MANIFEST_URL        = "https://raw.githubusercontent.com/FrugalITDad/repository.cutcablewizard/main/builds.json"
-ADDON_PROFILE       = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
-ADMIN_CONFIG_FILE   = os.path.join(ADDON_PROFILE, 'admin_config.json')
 FIRSTRUN_STEPS_FILE = os.path.join(HOME, 'firstrun_steps.txt')
 
 BUILD_NAMES = {
@@ -277,7 +275,13 @@ def has_room_for(size_mb):
 
 
 def install_build(url, name, version, build_id,
-                  firstrun_steps=None, extra_headers=None, sha256=None, size_mb=0):
+                  firstrun_steps=None, extra_headers=None, sha256=None, size_mb=0,
+                  maintenance=False):
+    """
+    maintenance=True (publishing devices only): installs the build exactly as
+    published - no First Run Setup and no carrying over of the previous
+    build's settings - ready to be changed and re-published.
+    """
     zip_path = os.path.join(HOME, "build.zip")
     expected_sha256 = (sha256 or '').lower() or None
 
@@ -285,7 +289,7 @@ def install_build(url, name, version, build_id,
 
     # Same build, first run already finished -> this is an update. Carry the
     # user's First Run choices over instead of asking them all again.
-    is_update = (installed_id == build_id
+    is_update = (not maintenance and installed_id == build_id
                  and not os.path.exists(updates.FIRSTRUN_FILE))
     carried, pending = ([], firstrun_steps)
     if is_update:
@@ -439,7 +443,10 @@ def install_build(url, name, version, build_id,
             updates.write_post_update(keep_state, name, version)
             updates.write_completed_firstrun(build_id, carried)
 
-        if keep_state is None or pending:
+        if maintenance:
+            xbmc.log(f"[CutCableWizard] Maintenance install of {name} v{version}: "
+                     "First Run Setup skipped.", xbmc.LOGINFO)
+        elif keep_state is None or pending:
             with open(os.path.join(HOME, 'firstrun.txt'), 'w') as f:
                 f.write("pending")
             steps_to_run = pending if keep_state is not None else firstrun_steps
@@ -450,7 +457,12 @@ def install_build(url, name, version, build_id,
         dp.close()
         transfer.finish(os.path.join(HOME, "build.zip"))
 
-        if keep_state is None:
+        if maintenance:
+            done_msg = ("[B]Maintenance install:[/B] First Run Setup is skipped, so the "
+                        "build is exactly as published - ready for your changes and "
+                        "Package & Publish.\n\n"
+                        "You can still run First Run Setup from the wizard menu.")
+        elif keep_state is None:
             done_msg = ("[B]IMPORTANT:[/B] After you re-open Kodi, please wait "
                         "approximately 45 seconds for the First Run Setup to begin automatically.")
         elif pending:
@@ -778,6 +790,16 @@ def main_menu():
             items.append(item)
 
         sel = xbmcgui.Dialog().select("CutCable Wizard", items, useDetails=True)
+        maintenance = False
+        if sel != -1 and updates.load_publish_token():
+            # Publishing devices: optionally install the build as-is for editing
+            mode = xbmcgui.Dialog().select("How should this build be installed?", [
+                "Normal install (with First Run Setup)",
+                "Build maintenance - skip First Run Setup (for editing & publishing)",
+            ])
+            if mode < 0:
+                sel = -1
+            maintenance = (mode == 1)
         if sel != -1:
             selected       = builds[sel]
             is_admin_build = selected['id'] == updates.ADMIN_BUILD_ID
@@ -790,7 +812,8 @@ def main_menu():
                 extra_headers  = {'Authorization': f'Bearer {admin_token}'}
                                  if is_admin_build else None,
                 sha256         = selected.get('sha256'),
-                size_mb        = selected.get('size_mb', 0)
+                size_mb        = selected.get('size_mb', 0),
+                maintenance    = maintenance
             )
 
     elif choice == 1:

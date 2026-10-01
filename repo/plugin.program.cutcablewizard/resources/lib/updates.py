@@ -329,6 +329,9 @@ def find_latest_admin_release(admin_url, token):
     return best
 
 
+_ADMIN_LOOKUP_CACHE = {}
+
+
 def get_admin_build(manifest=None):
     """
     Returns (build_dict, token) for the admin build when a URL and token are
@@ -347,10 +350,15 @@ def get_admin_build(manifest=None):
             steps = entry['firstrun_steps']
 
     latest = None
-    try:
-        latest = find_latest_admin_release(url, token)
-    except Exception as e:
-        log(f"Admin release lookup failed: {e}", xbmc.LOGWARNING)
+    cache_key = (url, token)
+    if cache_key in _ADMIN_LOOKUP_CACHE:            # one GitHub call per wizard run
+        latest = _ADMIN_LOOKUP_CACHE[cache_key]
+    else:
+        try:
+            latest = find_latest_admin_release(url, token)
+            _ADMIN_LOOKUP_CACHE[cache_key] = latest
+        except Exception as e:
+            log(f"Admin release lookup failed: {e}", xbmc.LOGWARNING)
 
     if latest:
         version, dl_url, size = latest['version'], latest['download_url'], latest['size_mb']

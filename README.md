@@ -176,8 +176,15 @@ Needs a **Publishing Token** (Admin Settings > Publishing Token): a fine-grained
 this repo and the private admin repo, with **Contents: Read and write** only, and an expiry date.
 Add it only on the device(s) you build on. It is never included in a build.
 
+To change a build, install it with **Install Build > Build maintenance** (only offered on devices
+with a Publishing Token): it installs the build exactly as published, without First Run Setup or
+carrying over the previous build's settings. Make your changes, then Package & Publish. The changelog
+is entered one line at a time (leave an entry empty to finish).
+
 Public builds leave out the addon settings you tick (logins, weather location - your choice is
-remembered per build) and reset the device name. Every build leaves out thumbnails, package caches,
+remembered per build), reset the device name, and run a privacy check: any login, password, key or
+token in the included settings that differs from the add-on's own default is blanked in the zip
+(it stays on the device). Every build also gets a fresh Kodi device ID. Every build leaves out thumbnails, package caches,
 temp files, the wizard's own settings (tokens) and guide data that is rebuilt on the device (EPG files,
 channel thumbnails, guide caches - about 35-40% of a build). Older copies of the build are removed from
 GitHub automatically. After publishing, fetch/pull in GitHub Desktop before editing the repo on your PC.

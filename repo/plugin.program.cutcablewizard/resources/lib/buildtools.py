@@ -56,11 +56,87 @@ REGENERATED_DATA = [re.compile(p) for p in (
     r'^userdata/addon_data/plugin\.video\.jet_guide/debug_log\.txt$',
     # Tied to the Fire TV the build was made on, or to your own viewing
     r'^userdata/addon_data/plugin\.video\.jet_guide/(device_uuid\.txt|last_watched\.json|reminders\.json)$',
+    # IAGL keeps its game database twice: iagl.db and an identical zipped
+    # backup. When iagl.db is missing, IAGL rebuilds it from the backup on
+    # first launch, so only the backup needs to ship (saves ~53 MB).
+    r'^userdata/addon_data/plugin\.program\.iagl/iagl\.db$',
 )]
 
 
 def is_regenerated(rel):
     return any(p.search(rel) for p in REGENERATED_DATA)
+
+
+# ---------------------------------------------------------------------------
+# Privacy check for PUBLIC builds
+# ---------------------------------------------------------------------------
+# Before packaging, every included add-on settings file is checked for values
+# that look like logins, passwords, keys or tokens. A value is only flagged if
+# it differs from the add-on's own shipped default (many add-ons ship public
+# API keys). Flagged values are blanked in the zip; they stay on this device.
+SENSITIVE_SETTING_ID = re.compile(
+    r'(token|passw|^pass$|pwd|secret|api_?key|apikey|auth|session|cookie|refresh|'
+    r'username|^user$|_user$|email|login|account|^pin$|device_?id|uuid|serial|client_id)', re.I)
+# Add-ons whose credential settings have short, non-obvious names
+KNOWN_CREDENTIAL_SETTINGS = {
+    'plugin.program.iagl': {'ia_u', 'ia_p', 'discord_username', 'discord_user_id',
+                            'discord_user_avatar', 'lobby_username'},
+}
+_SETTINGS_FILE = re.compile(r'^userdata/addon_data/([^/]+)/settings\.xml$')
+_SETTING_EL    = re.compile(r'<setting\s+id="([^"]+)"([^>]*?)(?:/>|>(.*?)</setting>)', re.S)
+_TRIVIAL       = {'', 'true', 'false', '0', '1', '-1', 'none', 'null', 'default'}
+_SECRET_TEXT   = re.compile(rb'(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|'
+                            rb'-----BEGIN [A-Z ]*PRIVATE KEY-----|Bearer\s+[A-Za-z0-9._\-]{20,})')
+
+
+def find_personal_data(files):
+    """
+    Returns (settings_to_blank {rel: {setting_id: addon_id}}, files_with_secrets [rel]).
+    """
+    blank, secret_files = {}, []
+    for full, rel, size in files:
+        m = _SETTINGS_FILE.match(rel)
+        if m:
+            addon_id = m.group(1)
+            try:
+                with open(full, 'r', encoding='utf-8', errors='replace') as f:
+                    text = f.read()
+            except OSError:
+                continue
+            default_path = os.path.join(HOME, 'addons', addon_id, 'resources', 'settings.xml')
+            try:
+                with open(default_path, 'r', encoding='utf-8', errors='replace') as f:
+                    defaults = f.read()
+            except OSError:
+                defaults = ''
+            known = KNOWN_CREDENTIAL_SETTINGS.get(addon_id, set())
+            for sm in _SETTING_EL.finditer(text):
+                sid, value = sm.group(1), (sm.group(3) or '').strip()
+                if value.lower() in _TRIVIAL or (value.isdigit() and len(value) <= 2):
+                    continue
+                if not (sid in known or SENSITIVE_SETTING_ID.search(sid)):
+                    continue
+                if value in defaults:           # the add-on's own shipped default
+                    continue
+                blank.setdefault(rel, {})[sid] = addon_id
+            continue
+        # Other small text files: look for obvious secrets (tokens, private keys)
+        if rel.startswith('userdata/') and size < 2 * 1048576 and \
+                rel.lower().endswith(('.json', '.txt', '.xml', '.ini', '.cfg', '.conf')):
+            try:
+                with open(full, 'rb') as f:
+                    if _SECRET_TEXT.search(f.read()):
+                        secret_files.append(rel)
+            except OSError:
+                pass
+    return blank, secret_files
+
+
+def _blank_settings(xml_bytes, setting_ids):
+    text = xml_bytes.decode('utf-8', errors='replace')
+    def repl(m):
+        return f'<setting id="{m.group(1)}" default="true" />' if m.group(1) in setting_ids else m.group(0)
+    return _SETTING_EL.sub(repl, text).encode('utf-8')
 
 
 # Already-compressed files are stored, everything else deflated (faster on Fire TV)
@@ -181,8 +257,8 @@ class _UploadReader:
         self.f.close()
 
 
-def upload_asset(release, zip_path, asset_name, token, progress=None, replace=False):
-    """Uploads zip_path to a release. Verifies the stored size. Returns the asset."""
+def upload_asset(release, zip_path, asset_name, token, progress=None, replace=False, sha256=None):
+    """Uploads zip_path to a release. Verifies the stored size and SHA-256. Returns the asset."""
     existing = next((a for a in release.get('assets', []) if a.get('name') == asset_name), None)
     if existing:
         if not replace:
@@ -202,6 +278,10 @@ def upload_asset(release, zip_path, asset_name, token, progress=None, replace=Fa
     if not asset or int(asset.get('size', -1)) != reader.total:
         raise PublishError("The upload finished but GitHub reports a different file size. "
                            "builds.json was not changed.")
+    digest = str(asset.get('digest') or '').lower()
+    if sha256 and digest.startswith('sha256:') and digest.split(':', 1)[1] != sha256.lower():
+        raise PublishError("The upload finished but GitHub's checksum doesn't match the file "
+                           "that was built. builds.json was not changed.")
     return asset
 
 
@@ -377,16 +457,32 @@ def collect(excluded_addon_data, stats=None):
     return dirs, files, total
 
 
-def _reset_device_name(xml_bytes):
+def _clean_guisettings(xml_bytes, public):
+    """
+    Removes identifiers tied to the device the build was made on:
+      - services.deviceuuid (all builds): Kodi's unique ID for this device,
+        used for UPnP/casting. Left empty, Kodi generates a new one on first
+        start, so each install gets its own.
+      - services.devicename (public builds): reset to "Kodi"; First Run Setup
+        asks for a name.
+    """
     text = xml_bytes.decode('utf-8', errors='replace')
-    text = re.sub(r'<setting id="services\.devicename"[^>]*>.*?</setting>',
-                  '<setting id="services.devicename" default="true">Kodi</setting>',
+    text = re.sub(r'<setting id="services\.deviceuuid"[^>]*?(?:/>|>.*?</setting>)',
+                  '<setting id="services.deviceuuid" default="true"></setting>',
                   text, flags=re.S)
+    if public:
+        text = re.sub(r'<setting id="services\.devicename"[^>]*>.*?</setting>',
+                      '<setting id="services.devicename" default="true">Kodi</setting>',
+                      text, flags=re.S)
     return text.encode('utf-8')
 
 
-def make_zip(zip_path, dirs, files, total, public, progress=None):
-    """Writes the build zip. progress(done_bytes, total_bytes, label) -> False to cancel."""
+def make_zip(zip_path, dirs, files, total, public, progress=None, blank=None):
+    """
+    Writes the build zip. progress(done_bytes, total_bytes, label) -> False to cancel.
+    blank: {rel: {setting_id, ...}} values to blank in those settings files.
+    """
+    blank = blank or {}
     os.makedirs(os.path.dirname(zip_path), exist_ok=True)
     done, skipped = 0, []
     try:
@@ -400,9 +496,13 @@ def make_zip(zip_path, dirs, files, total, public, progress=None):
                 ext   = os.path.splitext(rel)[1].lower()
                 ctype = zipfile.ZIP_STORED if ext in STORE_EXT else zipfile.ZIP_DEFLATED
                 try:
-                    if public and rel == 'userdata/guisettings.xml':
+                    if rel == 'userdata/guisettings.xml' or rel in blank:
                         with open(full, 'rb') as f:
-                            data = _reset_device_name(f.read())
+                            data = f.read()
+                        if rel == 'userdata/guisettings.xml':
+                            data = _clean_guisettings(data, public)
+                        if rel in blank:
+                            data = _blank_settings(data, set(blank[rel]))
                         zf.writestr(zipfile.ZipInfo.from_file(full, rel), data,
                                     compress_type=ctype)
                     else:
@@ -491,6 +591,28 @@ def cleanup_admin_releases(repo, token, new_name, keep=2):
 # ---------------------------------------------------------------------------
 def _input(heading, default=''):
     return xbmcgui.Dialog().input(heading, defaultt=default).strip()
+
+
+def _input_changelog(version, max_lines=8):
+    """
+    One on-screen-keyboard entry per line (the Kodi keyboard has no line-break
+    key). Leave an entry empty to finish. Shows the result to confirm or redo.
+    """
+    dialog = xbmcgui.Dialog()
+    while True:
+        lines = []
+        while len(lines) < max_lines:
+            hint = "most important first" if not lines else "leave empty to finish"
+            text = _input(f"What's new in v{version} - line {len(lines) + 1} ({hint})")
+            if not text:
+                break
+            lines.append(text)
+        if not lines:
+            return ''
+        preview = '\n'.join(f"  {l}" for l in lines)
+        if dialog.yesno(f"What's new in v{version}", preview,
+                        nolabel="Re-enter", yeslabel="Use this"):
+            return '\n'.join(lines)
 
 
 def _fmt_mb(n):
@@ -596,8 +718,7 @@ def package_and_publish(manifest):
             "to update.\n\nPublish anyway?"):
         return
 
-    changelog = _input(f"What's new in v{version}?  (use  |  to start a new line)")
-    changelog = '\n'.join(p.strip() for p in changelog.split('|') if p.strip())
+    changelog = _input_changelog(version)
     if not changelog and not dialog.yesno(
             "No Changelog", "No changelog entered. Publish without one?"):
         return
@@ -641,6 +762,26 @@ def package_and_publish(manifest):
 
     stats = {}
     dirs, files, total = collect(excluded, stats)
+
+    # Public builds: blank any logins/keys/tokens found in included settings
+    blank = {}
+    if t['public']:
+        blank, secret_files = find_personal_data(files)
+        if blank or secret_files:
+            found = [f"{list(v.values())[0]}: {', '.join(sorted(v))}" for v in blank.values()]
+            found += [f"{rel.split('addon_data/')[-1]} (whole file)" for rel in secret_files]
+            log(f"Privacy check flagged: {found}")
+            if not dialog.yesno(
+                    "Personal Data Found",
+                    "These look like logins, passwords or keys and would be published:\n\n  - "
+                    + "\n  - ".join(found[:12]) + ("\n  - ..." if len(found) > 12 else "") +
+                    "\n\nThey will be removed from the public build (they stay on this device).",
+                    nolabel="Cancel", yeslabel="Remove & continue"):
+                return
+            if secret_files:
+                drop = set(secret_files)
+                total -= sum(sz for _, rel, sz in files if rel in drop)
+                files = [x for x in files if x[1] not in drop]
     free = shutil.disk_usage(HOME).free
     need = int(total * 0.85) + 100 * 1048576
     if free < need and not dialog.yesno(
@@ -655,6 +796,8 @@ def package_and_publish(manifest):
                + (f"Guide data rebuilt on the device (left out): {_fmt_mb(stats['skipped_bytes'])}\n"
                   if stats.get('skipped_bytes') else "")
                + (f"Left out: {', '.join(excluded)}\n" if excluded else "")
+               + (f"Personal data removed: {sum(len(v) for v in blank.values())} setting(s)\n" if blank else "")
+               + (f"What's new:\n" + '\n'.join(f"  {l}" for l in changelog.splitlines()) + "\n" if changelog else "")
                + ("Device name reset to 'Kodi'.\n" if t['public'] else
                   "[COLOR yellow]Admin build: logins are included; goes to your PRIVATE repo.[/COLOR]\n")
                + "\nPackaging can take 10+ minutes on a Fire TV. Start?")
@@ -674,7 +817,7 @@ def package_and_publish(manifest):
         return not dp.iscanceled()
 
     try:
-        zip_size = make_zip(zip_path, dirs, files, total, t['public'], zprog)
+        zip_size = make_zip(zip_path, dirs, files, total, t['public'], zprog, blank)
     except Cancelled:
         dp.close()
         dialog.ok("Package & Publish", "Cancelled. Nothing was uploaded.")
@@ -706,7 +849,7 @@ def package_and_publish(manifest):
         try:
             if t['public']:
                 release = get_release_by_tag(t['repo'], t['tag'], token)
-                asset   = upload_asset(release, zip_path, asset_name, token, uprog, replace)
+                asset   = upload_asset(release, zip_path, asset_name, token, uprog, replace, zip_sha256)
                 dl_url  = f"https://github.com/{t['repo']}/releases/download/{t['tag']}/{asset_name}"
                 dp.update(100, "Updating builds.json...")
                 update_manifest_on_github(token, t['id'], version, dl_url, size_mb,
@@ -721,7 +864,8 @@ def package_and_publish(manifest):
                     if '422' not in str(e):
                         raise
                     release = get_release_by_tag(t['repo'], tag, token)   # tag exists: reuse
-                asset = upload_asset(release, zip_path, asset_name, token, uprog, replace=True)
+                asset = upload_asset(release, zip_path, asset_name, token, uprog, replace=True,
+                                     sha256=zip_sha256)
             break
         except Cancelled:
             dp.close()
