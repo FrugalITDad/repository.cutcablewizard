@@ -318,6 +318,7 @@ def install_build(url, name, version, build_id,
 
     admin_config = None
     wiped        = False
+    saved_favourites = None
     dp = xbmcgui.DialogProgress()
     dp.create("CordCutter Wizard", f"Downloading {name}...")
 
@@ -401,6 +402,9 @@ def install_build(url, name, version, build_id,
         admin_config = updates.backup_admin_config()
         updates.stash_running_wizard()
         keep_state   = None
+        # The user's favourites aren't part of any build; keep them
+        # (not for maintenance installs, which match the published build).
+        saved_favourites = None if maintenance else updates.read_favourites()
         if is_update:
             dp.update(0, "Saving your current setup settings...")
             keep_state = updates.snapshot_user_settings(carried)
@@ -436,6 +440,10 @@ def install_build(url, name, version, build_id,
         updates.restore_admin_config(admin_config)
         # Don't let an older wizard bundled in the build replace this one.
         updates.restore_newest_wizard()
+
+        if saved_favourites:
+            updates.restore_favourites(saved_favourites)
+            saved_favourites = None
 
         if keep_state is not None:
             dp.update(0, "Restoring your setup settings...")
@@ -474,7 +482,7 @@ def install_build(url, name, version, build_id,
                         "45 seconds and you will be asked only about those.")
         else:
             done_msg = ("Your previous setup choices (device name, weather, accounts, "
-                        "etc.) will be kept - no First Run Setup needed.\n\n"
+                        "sound, favourites etc.) will be kept - no First Run Setup needed.\n\n"
                         "After you re-open Kodi, wait about 45 seconds while your "
                         "settings are re-applied.")
 
@@ -490,6 +498,11 @@ def install_build(url, name, version, build_id,
         # The downloaded file is kept (unless it was bad) so a retry is quick.
         updates.restore_admin_config(admin_config)   # no-op if nothing was saved
         updates.restore_newest_wizard()
+        if wiped and saved_favourites:               # so a retry keeps them too
+            try:
+                updates.restore_favourites(saved_favourites)
+            except Exception:
+                pass
         binaries.cleanup()
         xbmcgui.Dialog().ok(
             "Installation Error",

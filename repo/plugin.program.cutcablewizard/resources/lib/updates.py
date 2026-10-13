@@ -7,6 +7,7 @@ Covers:
   - Carrying First Run Setup choices across a same-build update
 """
 import os, re, json, ssl, shutil, time, zipfile, urllib.request
+import xml.etree.ElementTree as ET
 import xbmc, xbmcgui, xbmcvfs, xbmcaddon
 
 ADDON_ID      = 'plugin.program.cutcablewizard'
@@ -15,7 +16,7 @@ ADDON_PROFILE = xbmcvfs.translatePath(xbmcaddon.Addon(ADDON_ID).getAddonInfo('pr
 
 ADMIN_BUILD_ID      = 'cordcutter_admin'
 ADMIN_BUILD_NAME    = 'CordCutter Admin'
-ADMIN_DEFAULT_STEPS = ['device_name', 'iptv_sync']
+ADMIN_DEFAULT_STEPS = ['audio', 'device_name', 'iptv_sync']
 ADMIN_CONFIG_FILE   = os.path.join(ADDON_PROFILE, 'admin_config.json')
 # admin_config.json relative to HOME, so it can be carried through a wipe
 ADMIN_CONFIG_REL    = os.path.join('userdata', 'addon_data', ADDON_ID, 'admin_config.json')
@@ -30,8 +31,16 @@ SNOOZE_FILE         = os.path.join(HOME, 'update_snooze.json')
 # Canonical order of First Run steps (must match service.run_first_time_setup)
 # ('buffer' was retired in 2.11: on Kodi 21 the video buffer is set
 #  automatically by tune_cache(); builds that still list it are ignored.)
-ALL_STEPS = ['subtitles', 'weather', 'device_name', 'simkl',
+ALL_STEPS = ['subtitles', 'audio', 'weather', 'device_name', 'simkl',
              'jellycon', 'iagl', 'iptv_sync']
+
+# Kodi audio settings the 'audio' step changes. Order matters when they are
+# re-applied: Kodi only shows (and so only accepts) the passthrough options
+# once the channel layout and "Allow passthrough" are set.
+AUDIO_SETTINGS = ['audiooutput.channels', 'audiooutput.passthrough',
+                  'audiooutput.ac3passthrough', 'audiooutput.ac3transcode',
+                  'audiooutput.eac3passthrough', 'audiooutput.dtspassthrough',
+                  'audiooutput.truehdpassthrough', 'audiooutput.dtshdpassthrough']
 
 # What each First Run step changes, so it can be captured before an update
 # wipes Kodi and put back afterwards.
@@ -40,6 +49,7 @@ ALL_STEPS = ['subtitles', 'weather', 'device_name', 'simkl',
 #   paths    -> files/folders (relative to HOME) copied back over the new build
 STEP_PRESERVE = {
     'subtitles':   {'settings': ['subtitles.enabled']},
+    'audio':       {'settings': AUDIO_SETTINGS},
     'device_name': {'settings': ['services.devicename']},
     'weather':     {'paths': ['userdata/addon_data/weather.multi']},
     'simkl':       {'paths': ['userdata/addon_data/script.simkl'],
@@ -796,6 +806,75 @@ def remove_addon_folders(addon_ids):
 # its game lists directly and skip that, so IAGL would have no database.
 # The wizard therefore unpacks it itself, exactly as IAGL's own restore does.
 IAGL_DATA_DIR = os.path.join(HOME, 'userdata', 'addon_data', 'plugin.program.iagl')
+
+
+FAVOURITES_FILE = os.path.join(HOME, 'userdata', 'favourites.xml')
+_ADDON_REF_RE   = re.compile(r'(?:plugin|script)://([A-Za-z0-9_.\-]+)'
+                             r'|Run(?:Addon|Script)\(\s*"?([A-Za-z0-9_\-]+\.[A-Za-z0-9_.\-]+)\s*[,")]')
+
+
+def read_favourites():
+    """Returns the user's favourites.xml text (None if there is none). Call before wipe_kodi()."""
+    try:
+        with open(FAVOURITES_FILE, 'r', encoding='utf-8') as f:
+            text = f.read()
+        return text if '<favourite' in text else None
+    except Exception:
+        return None
+
+
+def _favourite_entries(text):
+    try:
+        return [e for e in ET.fromstring(text) if e.tag == 'favourite']
+    except Exception:
+        return []
+
+
+def _addons_exist(command):
+    """False if the favourite opens an add-on that isn't installed."""
+    roots = [os.path.join(HOME, 'addons'), xbmcvfs.translatePath('special://xbmc/addons/')]
+    for m in _ADDON_REF_RE.finditer(command or ''):
+        addon_id = m.group(1) or m.group(2)
+        if not any(os.path.isdir(os.path.join(r, addon_id)) for r in roots):
+            return False
+    return True
+
+
+def restore_favourites(saved_text):
+    """
+    Call AFTER the new build is extracted. Puts the user's favourites back,
+    dropping any that open an add-on the new build doesn't have, then adds
+    any favourites the build itself ships that the user didn't already have.
+    Returns (kept, dropped).
+    """
+    if not saved_text:
+        return 0, 0
+    mine = _favourite_entries(saved_text)
+    if not mine:
+        return 0, 0
+    shipped = []
+    if os.path.exists(FAVOURITES_FILE):
+        with open(FAVOURITES_FILE, 'r', encoding='utf-8', errors='replace') as f:
+            shipped = _favourite_entries(f.read())
+
+    kept    = [e for e in mine if _addons_exist(e.text)]
+    dropped = len(mine) - len(kept)
+    seen    = {(e.text or '').strip() for e in kept}
+    merged  = kept + [e for e in shipped if (e.text or '').strip() not in seen]
+
+    root = ET.Element('favourites')
+    for e in merged:
+        e.tail = '\n'
+        root.append(e)
+    root.text = '\n'
+    os.makedirs(os.path.dirname(FAVOURITES_FILE), exist_ok=True)
+    tmp = FAVOURITES_FILE + '.part'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(ET.tostring(root, encoding='unicode') + '\n')
+    os.replace(tmp, FAVOURITES_FILE)
+    log(f"Favourites restored: kept {len(kept)}, dropped {dropped} (add-on not in this build), "
+        f"added {len(merged) - len(kept)} from the build")
+    return len(kept), dropped
 
 
 def repair_iagl_db(progress=None):

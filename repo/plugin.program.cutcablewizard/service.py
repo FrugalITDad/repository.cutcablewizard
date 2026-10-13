@@ -29,6 +29,17 @@ def set_kodi_setting(setting, value):
     }))
 
 
+def try_set_kodi_setting(setting, value):
+    """Like set_kodi_setting, but returns True only if Kodi accepted it."""
+    try:
+        reply = json.loads(xbmc.executeJSONRPC(json.dumps({
+            "jsonrpc": "2.0", "method": "Settings.SetSettingValue",
+            "params": {"setting": setting, "value": value}, "id": 1})))
+        return 'error' not in reply
+    except Exception:
+        return False
+
+
 def enable_addon(addon_id):
     """Enables an addon via JSON-RPC."""
     xbmc.executeJSONRPC(json.dumps({
@@ -333,7 +344,7 @@ def apply_post_update(monitor, standalone):
         fix_platform_addons(monitor)
 
     for key, value in state.get('settings', {}).items():
-        set_kodi_setting(key, value)
+        try_set_kodi_setting(key, value)
         xbmc.log(f"[CutCableWizard] Post-update: restored setting {key}", xbmc.LOGINFO)
 
     for addon_id, enabled in state.get('addons', {}).items():
@@ -366,7 +377,7 @@ def read_firstrun_steps():
     or None if the file does not exist (meaning run all steps).
 
     Step names used in run_first_time_setup():
-      subtitles, weather, device_name, simkl, jellycon, iagl, iptv_sync
+      subtitles, audio, weather, device_name, simkl, jellycon, iagl, iptv_sync
     ('buffer' is retired: the video buffer is now set automatically.)
     """
     if not os.path.exists(FIRSTRUN_STEPS_FILE):
@@ -454,6 +465,37 @@ def run_first_time_setup(monitor):
             "Enable automatic subtitles?"
         ):
             set_kodi_setting("subtitles.enabled", True)
+
+    # ── Step: Sound ───────────────────────────────────────────────────────
+    # TV speakers: plain stereo (the build default). Soundbar / receiver:
+    # Dolby Digital passthrough plus "transcode to Dolby Digital", so 5.1
+    # from any source arrives as Dolby Digital - supported by virtually every
+    # soundbar, receiver and TV ARC connection. DTS, Dolby Digital Plus and
+    # lossless formats stay off (they go silent on equipment that lacks them;
+    # Kodi converts them to Dolby Digital instead).
+    if 'audio' in active:
+        title  = f"Setup ({n('audio')}/{total}): Sound"
+        choice = dialog.select(f"{title} - how do you listen to this TV?", [
+            "TV speakers or headphones",
+            "Soundbar or AV receiver (surround sound)",
+        ])
+        if choice == 0:
+            set_kodi_setting("audiooutput.passthrough", False)
+        elif choice == 1:
+            ok = try_set_kodi_setting("audiooutput.passthrough", True)
+            if ok:
+                try_set_kodi_setting("audiooutput.ac3passthrough", True)
+                try_set_kodi_setting("audiooutput.ac3transcode", True)
+                dialog.ok(title,
+                          "Surround sound is on.\n\n"
+                          "If a video ever plays with [B]no sound[/B], go to Settings > "
+                          "System > Audio and turn off [B]Allow passthrough[/B].")
+            else:
+                dialog.ok(title,
+                          "This device can't send surround sound to a soundbar or "
+                          "receiver, so standard sound will be used.")
+            xbmc.log(f"[CutCableWizard] Sound: passthrough {'on' if ok else 'not available'}.",
+                     xbmc.LOGINFO)
 
     # ── Step: Weather ─────────────────────────────────────────────────────
     if 'weather' in active:

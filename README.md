@@ -131,6 +131,7 @@ About **45 seconds** after Kodi reopens, First Run Setup starts automatically. H
 | Step | What you'll need | Builds |
 |---|---|---|
 | **Subtitles** | Whether you want subtitles on or off | All |
+| **Sound** | Whether you listen through the TV's speakers or a soundbar / AV receiver | All |
 | **Weather** | Your city or ZIP code for the home-screen weather | All |
 | **Device name** | A unique name for this device, e.g. `Kodi-LivingRoom` | All |
 | **Simkl** *(optional)* | Your [Simkl](https://simkl.com) account, to track what you've watched | Plus & Pro builds |
@@ -139,6 +140,18 @@ About **45 seconds** after Kodi reopens, First Run Setup starts automatically. H
 | **Live TV guide sync** | Nothing - runs automatically (about 90 seconds) | All |
 
 The video buffer is sized automatically for your device's memory - there's nothing to set.
+
+### Sound: TV speakers vs. soundbar or receiver
+
+Builds start with standard stereo sound, which works everywhere. If you choose **Soundbar or AV
+receiver** in the Sound step, the wizard sends surround sound as **Dolby Digital 5.1**, which almost
+every soundbar, receiver and TV (HDMI ARC) connection supports.
+
+- **No sound on a video?** Go to **Settings > System > Audio** and turn off **Allow passthrough**.
+- **Have a receiver that supports more?** In the same screen you can also turn on
+  **Dolby Digital Plus (E-AC3)**, **DTS**, **TrueHD** or **DTS-HD** passthrough. Only turn on formats
+  your equipment supports - an unsupported one plays with no sound. *(Set the settings level at the
+  bottom left to **Advanced** or **Expert** if these options aren't shown.)*
 
 You can run First Run Setup again at any time from the wizard.
 
@@ -149,8 +162,11 @@ You can run First Run Setup again at any time from the wizard.
 - **Update prompts:** when a new version of your build is published, Kodi asks if you'd like to update
   and shows what's new. Choose **Not Now** to be reminded later (tomorrow, 3 days, 1 or 2 weeks).
 - **Your settings are kept:** updating to a new version of the *same* build keeps your First Run Setup
-  choices (device name, weather, logins), so you won't have to redo them. You'll only be
+  choices (device name, weather, logins, sound), so you won't have to redo them. You'll only be
   asked about new setup steps.
+- **Your favourites are kept:** favourites you've added stay when you update or switch builds. When
+  switching builds, any favourite for an add-on the new build doesn't include is removed.
+  (Fresh Start removes everything, including favourites.)
 - **Wizard menu:** the top of the menu shows which build and version you have installed, and whether an
   update is available.
 

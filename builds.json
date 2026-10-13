@@ -10,7 +10,7 @@
       "sha256": "caadc0b48f285e83285fb8cdf7337dcc931800c12461ec895233f6ed3aedd550",
       "changelog": "fixed live tv refresh",
       "admin_only": false,
-      "firstrun_steps": ["subtitles", "weather", "device_name", "iptv_sync", "buffer"]
+      "firstrun_steps": ["subtitles", "audio", "weather", "device_name", "iptv_sync"]
     },
     {
       "id": "cordcutter_plus",
@@ -22,7 +22,7 @@
       "sha256": "807e24205a5c3a94b10fcf3cba78051741dadf6cc9fd8227189f17a2f050ecae",
       "changelog": "fixed epg refresh",
       "admin_only": false,
-      "firstrun_steps": ["subtitles", "weather", "device_name", "simkl", "iptv_sync", "buffer"]
+      "firstrun_steps": ["subtitles", "audio", "weather", "device_name", "simkl", "iptv_sync"]
     },
     {
       "id": "cordcutter_plus_gaming",
@@ -34,7 +34,7 @@
       "sha256": "4439ee7735d9bf963d1a2e0e576fb06df5333263a43b4f34ebb2d5e657ead19e",
       "changelog": "fixed epg refresh\nfixed iagl error",
       "admin_only": false,
-      "firstrun_steps": ["subtitles", "weather", "device_name", "simkl", "iagl", "iptv_sync", "buffer"]
+      "firstrun_steps": ["subtitles", "audio", "weather", "device_name", "simkl", "iagl", "iptv_sync"]
     },
     {
       "id": "cordcutter_pro",
@@ -46,7 +46,7 @@
       "sha256": "5f9d736b3f63147db7567ea41232fab1d550747701e2ccaa1f2f77c7ba41f749",
       "changelog": "fixed epg refreshes",
       "admin_only": false,
-      "firstrun_steps": ["subtitles", "weather", "device_name", "simkl", "jellycon", "iptv_sync", "buffer"]
+      "firstrun_steps": ["subtitles", "audio", "weather", "device_name", "simkl", "jellycon", "iptv_sync"]
     },
     {
       "id": "cordcutter_pro_gaming",
@@ -58,7 +58,7 @@
       "sha256": "d4a3a6e0ac2f666fcd93a8478b6e30cda13927756aa47d28c6974bfb761b1c29",
       "changelog": "fixed epg refresh\nfixed iagl error",
       "admin_only": false,
-      "firstrun_steps": ["subtitles", "weather", "device_name", "simkl", "jellycon", "iagl", "iptv_sync", "buffer"]
+      "firstrun_steps": ["subtitles", "audio", "weather", "device_name", "simkl", "jellycon", "iagl", "iptv_sync"]
     },
     {
       "id": "cordcutter_fresh_start",
