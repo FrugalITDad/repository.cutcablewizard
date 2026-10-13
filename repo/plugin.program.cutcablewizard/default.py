@@ -775,7 +775,8 @@ def main_menu():
 
     options = ["Install Build", "Fresh Start", "First Run Setup", "Admin Settings"]
     choice  = xbmcgui.Dialog().select(
-        f"CutCable Wizard  -  {installed_build_status(manifest, admin_build)}", options)
+        f"CutCable Wizard v{ADDON.getAddonInfo('version')}  -  "
+        f"{installed_build_status(manifest, admin_build)}", options)
 
     if choice == 0:
         if not manifest and not admin_build:
