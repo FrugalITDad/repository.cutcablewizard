@@ -11,6 +11,7 @@ running **Kodi 21 (Omega)**.
 - [4. Installing CutCableWizard & a build](#4-installing-cutcablewizard--a-build)
 - [5. First Run Setup checklist](#5-first-run-setup-checklist)
 - [Updates & the wizard menu](#updates--the-wizard-menu)
+- [Suggested free apps](#suggested-free-apps)
 
 ---
 
@@ -176,6 +177,116 @@ You can run First Run Setup again at any time from the wizard.
 | **Fresh Start** | Wipes Kodi back to a clean slate with only the wizard installed |
 | **First Run Setup** | Runs the setup steps again |
 | **Admin Settings** | For the maintainer only - not needed for normal use |
+
+---
+
+## Suggested free apps
+
+These apps work alongside Kodi on Fire TV and Google TV devices. Everything listed has free content
+(some also sell an optional upgrade). Install them from your device's app store unless noted.
+
+**Key:** 📺 = Live TV channels · 🎬 = On demand (watch any time)
+
+> **Tip:** Your device has free live channels built in too: **Google TV Freeplay** (the *Live* tab on
+> Google TV) and **Fire TV Channels** (the *Live* tab on Fire TV).
+
+### Movies & TV
+
+| App | What's on it | 📺 Live | 🎬 On demand |
+|---|---|:-:|:-:|
+| **Tubi** | One of the largest free libraries of movies and shows | ✅ | ✅ |
+| **Pluto TV** | Hundreds of themed channels: classic TV, movies, news | ✅ | ✅ |
+| **The Roku Channel** | Free movies, shows and 100+ live channels (works on Fire TV and Google TV too) | ✅ | ✅ |
+| **Plex** | Free movies, shows and live channels | ✅ | ✅ |
+| **Xumo Play** | Free channels and movies, no sign-in | ✅ | ✅ |
+| **Airy TV** | Live channels and movies | ✅ | ✅ |
+| **Zone·ify** | Channels, movies, shows and a kids zone | ✅ | ✅ |
+| **Fawesome** | Free movies and shows across many genres | ✅ | ✅ |
+| **FilmRise** | Movies, classic TV, true crime and documentaries | | ✅ |
+| **NASA+** | Space documentaries and live launch coverage | ✅ | ✅ |
+
+### Free live TV services
+
+| App | What's on it | 📺 Live | 🎬 On demand |
+|---|---|:-:|:-:|
+| **Sling TV (Freestream)** | Free channel guide - no account needed | ✅ | ✅ |
+| **Philo (free channels)** | Free channels with a free account, no credit card | ✅ | ✅ |
+| **MyFree DIRECTV** | Free channels in the DIRECTV app with a free account, no credit card | ✅ | ✅ |
+| **TCLtv+** | Free channels and movies *(made for TCL TVs; may not appear on other devices)* | ✅ | ✅ |
+
+### Local news & weather
+
+| App | What's on it | 📺 Live | 🎬 On demand |
+|---|---|:-:|:-:|
+| **Local Now** | Local news, weather and free channels for your area | ✅ | ✅ |
+| **Zeam** | Live local news and community programming | ✅ | ✅ |
+| **Haystack News** | Local and national news channels and clips | ✅ | ✅ |
+| **NewsON** | Live and recent newscasts from local stations | ✅ | ✅ |
+| **FOX LOCAL** | Live news and weather from FOX stations | ✅ | ✅ |
+| **WeatherNation** | 24/7 weather coverage and local forecasts | ✅ | |
+| **PBS** | Your local PBS station live, plus PBS shows and documentaries | ✅ | ✅ |
+
+### Sports
+
+| App | What's on it | 📺 Live | 🎬 On demand |
+|---|---|:-:|:-:|
+| **CBS Sports** | Free CBS Sports HQ and Golazo (soccer) channels, highlights | ✅ | ✅ |
+| **Red Bull TV** | Extreme sports, motorsports, events and documentaries | ✅ | ✅ |
+| **Your leagues' own apps** | Most leagues have free apps with highlights and news | | ✅ |
+
+### Family friendly
+
+| App | What's on it | 📺 Live | 🎬 On demand |
+|---|---|:-:|:-:|
+| **PBS Kids** | PBS Kids shows plus the live PBS Kids channel | ✅ | ✅ |
+| **HappyKids** | Thousands of kids' shows and movies | | ✅ |
+| **Kidoodle.TV** | Kids' shows screened for younger viewers | | ✅ |
+| **BYUtv** | Family shows, game shows and sports | ✅ | ✅ |
+| **RedeemTV** | Ad-free Christian and family movies and series *(free account; donor-supported)* | | ✅ |
+| **Angel Studios** | Faith and family films and series *(some titles free; most need a paid Guild membership)* | | ✅ |
+| **iHeartRadio Family** | Kid-friendly music and radio stations *(Fire TV)* | — | — |
+
+### Free with your library card
+
+| App | What's on it | 📺 Live | 🎬 On demand |
+|---|---|:-:|:-:|
+| **Kanopy** | Films, documentaries and Kanopy Kids | | ✅ |
+| **Hoopla** | Movies, TV, music and audiobooks *(Fire TV app; on Google TV, cast from your phone)* | | ✅ |
+
+### Music & radio
+
+| App | What's on it |
+|---|---|
+| **Spotify** | Music and podcasts (free with ads) |
+| **Pandora** | Personalized music stations |
+| **iHeartRadio** | Live local radio stations, podcasts and playlists |
+| **TuneIn Radio** | Radio stations from around the world |
+| **Vevo** | Music video channels (📺) and videos on demand (🎬) |
+
+### Spanish-language
+
+| App | What's on it | 📺 Live | 🎬 On demand |
+|---|---|:-:|:-:|
+| **ViX** | Free tier with Spanish-language channels, novelas, movies and news | ✅ | ✅ |
+
+### YouTube
+
+| App | What's on it | 📺 Live | 🎬 On demand |
+|---|---|:-:|:-:|
+| **YouTube** | The official app | ✅ | ✅ |
+| **SmartTube** | Ad-free YouTube for TV. Install with Downloader **only from the official [GitHub page](https://github.com/yuliskov/SmartTube)** - copies from other sites may be unsafe | ✅ | ✅ |
+
+### Tools
+
+| App | What it does |
+|---|---|
+| **Kodi** | Runs the CordCutter builds |
+| **Downloader** | Installs apps that aren't in the app store (e.g. Kodi on Fire TV, SmartTube) |
+| **VLC** | Plays almost any video or audio file, from USB drives or your network |
+| **LocalSend** | Sends files between your phone, computer and TV over Wi-Fi |
+| **X-plore File Explorer** | File manager for USB drives, network shares and clearing out downloads |
+
+*App availability and free content can change. This list was last checked in October 2026.*
 
 ---
 
