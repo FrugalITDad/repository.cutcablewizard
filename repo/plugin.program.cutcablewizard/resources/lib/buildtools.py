@@ -441,6 +441,10 @@ def collect(excluded_addon_data, stats=None):
                 rel  = rel_root + f
                 if f in SKIP_FILE_NAMES or f.endswith('.pyc') or os.path.islink(full):
                     continue
+                # SQLite side files: the database itself is captured as one
+                # consistent snapshot instead (see _sqlite_snapshot)
+                if f.endswith(('.db-wal', '.db-shm', '.db-journal')):
+                    continue
                 if rel_root == 'userdata/Database/' and not KEEP_DATABASES.match(f):
                     continue
                 try:
@@ -455,6 +459,31 @@ def collect(excluded_addon_data, stats=None):
                 files.append((full, rel, size))
                 total += size
     return dirs, files, total
+
+
+def _sqlite_snapshot(path):
+    """
+    For a SQLite database in WAL mode (has a -wal file next to it, e.g.
+    SlyGuy's settings.db), returns a temp file holding a consistent copy that
+    includes the not-yet-merged changes. Returns None if not needed/possible.
+    """
+    if not os.path.exists(path + '-wal'):
+        return None
+    try:
+        import sqlite3
+        tmp = os.path.join(WORK_DIR, 'snapshot_' + hashlib.sha1(path.encode()).hexdigest()[:12] + '.db')
+        os.makedirs(WORK_DIR, exist_ok=True)
+        src = sqlite3.connect(path, timeout=10)          # read only; nothing is written
+        dst = sqlite3.connect(tmp)
+        with dst:
+            src.backup(dst)
+        dst.execute("PRAGMA journal_mode=DELETE")
+        dst.close()
+        src.close()
+        return tmp
+    except Exception as e:
+        log(f"Could not snapshot {path}: {e}; copying the file as-is", xbmc.LOGWARNING)
+        return None
 
 
 def _clean_guisettings(xml_bytes, public):
@@ -505,6 +534,11 @@ def make_zip(zip_path, dirs, files, total, public, progress=None, blank=None):
                             data = _blank_settings(data, set(blank[rel]))
                         zf.writestr(zipfile.ZipInfo.from_file(full, rel), data,
                                     compress_type=ctype)
+                    elif rel.endswith('.db') and os.path.exists(full + '-wal'):
+                        snap = _sqlite_snapshot(full)
+                        zf.write(snap or full, rel, compress_type=ctype, compresslevel=6)
+                        if snap:
+                            os.remove(snap)
                     else:
                         zf.write(full, rel, compress_type=ctype, compresslevel=6)
                 except FileNotFoundError:

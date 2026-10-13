@@ -130,7 +130,7 @@ def wipe_kodi():
     for trigger in ['firstrun.txt', 'firstrun_steps.txt', 'installed_version.txt',
                     'last_update_check.txt', 'post_fresh_start.txt',
                     'firstrun_completed.json', 'post_update.json',
-                    'update_snooze.json']:
+                    'update_snooze.json', 'cache_tuned.json']:
         path = os.path.join(HOME, trigger)
         try:
             if os.path.exists(path):
@@ -443,6 +443,9 @@ def install_build(url, name, version, build_id,
             updates.write_post_update(keep_state, name, version)
             updates.write_completed_firstrun(build_id, carried)
 
+        # Gaming builds: unpack IAGL's game database (shipped zipped)
+        updates.repair_iagl_db(progress=lambda m: dp.update(100, m))
+
         if maintenance:
             xbmc.log(f"[CutCableWizard] Maintenance install of {name} v{version}: "
                      "First Run Setup skipped.", xbmc.LOGINFO)
@@ -471,7 +474,7 @@ def install_build(url, name, version, build_id,
                         "45 seconds and you will be asked only about those.")
         else:
             done_msg = ("Your previous setup choices (device name, weather, accounts, "
-                        "buffer, etc.) will be kept - no First Run Setup needed.\n\n"
+                        "etc.) will be kept - no First Run Setup needed.\n\n"
                         "After you re-open Kodi, wait about 45 seconds while your "
                         "settings are re-applied.")
 
@@ -518,7 +521,7 @@ def trigger_first_run_setup(manifest):
             firstrun_steps = current_build.get('firstrun_steps')
 
     if build_id == 'cordcutter_admin' and not firstrun_steps:
-        firstrun_steps = ['device_name', 'iptv_sync', 'buffer']
+        firstrun_steps = list(updates.ADMIN_DEFAULT_STEPS)
 
     build_name = BUILD_NAMES.get(build_id, build_id)
     if not xbmcgui.Dialog().yesno(

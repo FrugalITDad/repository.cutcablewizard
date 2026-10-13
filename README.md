@@ -137,7 +137,8 @@ About **45 seconds** after Kodi reopens, First Run Setup starts automatically. H
 | **JellyCon** | Your Jellyfin server address and login | Pro builds |
 | **Archive.org** | Your [Archive.org](https://archive.org/account/signup) username and password, so games can download | Gaming builds |
 | **Live TV guide sync** | Nothing - runs automatically (about 90 seconds) | All |
-| **Buffer optimization** | Select **USE OPTIMAL** when the screen opens | All |
+
+The video buffer is sized automatically for your device's memory - there's nothing to set.
 
 You can run First Run Setup again at any time from the wizard.
 
@@ -148,7 +149,7 @@ You can run First Run Setup again at any time from the wizard.
 - **Update prompts:** when a new version of your build is published, Kodi asks if you'd like to update
   and shows what's new. Choose **Not Now** to be reminded later (tomorrow, 3 days, 1 or 2 weeks).
 - **Your settings are kept:** updating to a new version of the *same* build keeps your First Run Setup
-  choices (device name, weather, logins, buffer), so you won't have to redo them. You'll only be
+  choices (device name, weather, logins), so you won't have to redo them. You'll only be
   asked about new setup steps.
 - **Wizard menu:** the top of the menu shows which build and version you have installed, and whether an
   update is available.

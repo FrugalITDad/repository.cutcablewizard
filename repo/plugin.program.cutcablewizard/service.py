@@ -366,7 +366,8 @@ def read_firstrun_steps():
     or None if the file does not exist (meaning run all steps).
 
     Step names used in run_first_time_setup():
-      subtitles, weather, device_name, simkl, jellycon, iagl, iptv_sync, buffer
+      subtitles, weather, device_name, simkl, jellycon, iagl, iptv_sync
+    ('buffer' is retired: the video buffer is now set automatically.)
     """
     if not os.path.exists(FIRSTRUN_STEPS_FILE):
         return None
@@ -435,8 +436,7 @@ def run_first_time_setup(monitor):
     fix_platform_addons(monitor)
 
     # ── Determine which steps are active for this build ───────────────────
-    ALL_STEPS = ['subtitles', 'weather', 'device_name', 'simkl',
-                 'jellycon', 'iagl', 'iptv_sync', 'buffer']
+    ALL_STEPS = updates.ALL_STEPS
 
     allowed = read_firstrun_steps()
     active  = [s for s in ALL_STEPS if allowed is None or s in allowed]
@@ -554,25 +554,6 @@ def run_first_time_setup(monitor):
     if 'iptv_sync' in active:
         run_iptv_sync(monitor, f"Setup ({n('iptv_sync')}/{total}): IPTV Guide Sync")
 
-    # ── Step: EZ Maintenance+ Buffer Optimization ─────────────────────────
-    if 'buffer' in active:
-        if is_addon_present("script.ezmaintenanceplus"):
-            if dialog.yesno(
-                f"Setup ({n('buffer')}/{total}): Buffer Optimization",
-                "Would you like to optimize the buffer size for this device?\n\n"
-                "This is recommended for the best streaming performance."
-            ):
-                dialog.ok(
-                    "Buffer Optimization",
-                    "The Advanced Settings screen will now open.\n\n"
-                    "Select [B]USE OPTIMAL[/B] to apply the best buffer "
-                    "settings for this device, then close the screen to continue."
-                )
-                xbmc.executebuiltin("RunPlugin(plugin://script.ezmaintenanceplus/?url=ur&action=adv_settings&name)")
-                wait_for_external_window(monitor, timeout_appear=10, timeout_close=300)
-        else:
-            xbmc.log("[CutCableWizard] script.ezmaintenanceplus not found – skipping.", xbmc.LOGINFO)
-
     # ── Record which steps are done so future updates can skip them ───────
     build_id, _ = get_installed_info()
     if build_id:
@@ -685,6 +666,13 @@ def run_update_check():
 def run_service():
     monitor = xbmc.Monitor()
     xbmc.log("[CutCableWizard] Service started.", xbmc.LOGINFO)
+
+    # Gaming builds: make sure IAGL's game database is unpacked (does nothing
+    # once it exists, so this only ever runs once per install)
+    updates.repair_iagl_db()
+
+    # Size Kodi's video buffer for this device's RAM (once per install)
+    updates.tune_cache()
 
     if os.path.exists(FIRSTRUN_FILE):
         run_first_time_setup(monitor)

@@ -6,7 +6,7 @@ Covers:
   - Admin build credentials (admin_config.json) and admin release lookup
   - Carrying First Run Setup choices across a same-build update
 """
-import os, re, json, ssl, shutil, time, urllib.request
+import os, re, json, ssl, shutil, time, zipfile, urllib.request
 import xbmc, xbmcgui, xbmcvfs, xbmcaddon
 
 ADDON_ID      = 'plugin.program.cutcablewizard'
@@ -15,7 +15,7 @@ ADDON_PROFILE = xbmcvfs.translatePath(xbmcaddon.Addon(ADDON_ID).getAddonInfo('pr
 
 ADMIN_BUILD_ID      = 'cordcutter_admin'
 ADMIN_BUILD_NAME    = 'CordCutter Admin'
-ADMIN_DEFAULT_STEPS = ['device_name', 'iptv_sync', 'buffer']
+ADMIN_DEFAULT_STEPS = ['device_name', 'iptv_sync']
 ADMIN_CONFIG_FILE   = os.path.join(ADDON_PROFILE, 'admin_config.json')
 # admin_config.json relative to HOME, so it can be carried through a wipe
 ADMIN_CONFIG_REL    = os.path.join('userdata', 'addon_data', ADDON_ID, 'admin_config.json')
@@ -28,8 +28,10 @@ RESTORE_DIR         = os.path.join(HOME, 'cutcable_restore')
 SNOOZE_FILE         = os.path.join(HOME, 'update_snooze.json')
 
 # Canonical order of First Run steps (must match service.run_first_time_setup)
+# ('buffer' was retired in 2.11: on Kodi 21 the video buffer is set
+#  automatically by tune_cache(); builds that still list it are ignored.)
 ALL_STEPS = ['subtitles', 'weather', 'device_name', 'simkl',
-             'jellycon', 'iagl', 'iptv_sync', 'buffer']
+             'jellycon', 'iagl', 'iptv_sync']
 
 # What each First Run step changes, so it can be captured before an update
 # wipes Kodi and put back afterwards.
@@ -45,7 +47,6 @@ STEP_PRESERVE = {
     'jellycon':    {'paths': ['userdata/addon_data/plugin.video.jellycon'],
                     'addons': ['plugin.video.jellycon']},
     'iagl':        {'paths': ['userdata/addon_data/plugin.program.iagl']},
-    'buffer':      {'paths': ['userdata/advancedsettings.xml']},
     # iptv_sync has nothing to capture; it is simply re-run after the update.
 }
 
@@ -414,7 +415,7 @@ def plan_same_build_update(build_id, new_steps):
     feature have no completion record; for those, a finished first run
     (no firstrun.txt) is treated as having completed every current step.
     """
-    new_steps = list(new_steps or ALL_STEPS)
+    new_steps = [s for s in (new_steps or ALL_STEPS) if s in ALL_STEPS]   # drops retired steps
     completed = read_completed_firstrun(build_id)
     if completed is None:
         completed = new_steps
@@ -784,3 +785,117 @@ def remove_addon_folders(addon_ids):
         except Exception as e:
             log(f"Could not remove {addon_id}: {e}", xbmc.LOGWARNING)
     return removed
+
+
+# ---------------------------------------------------------------------------
+# IAGL game database
+# ---------------------------------------------------------------------------
+# Builds ship IAGL's zipped database backup but not the unpacked iagl.db
+# (saves ~53 MB per gaming build). IAGL only rebuilds iagl.db when it is
+# opened from its own main screen; the home-menu shortcuts and widgets open
+# its game lists directly and skip that, so IAGL would have no database.
+# The wizard therefore unpacks it itself, exactly as IAGL's own restore does.
+IAGL_DATA_DIR = os.path.join(HOME, 'userdata', 'addon_data', 'plugin.program.iagl')
+
+
+def repair_iagl_db(progress=None):
+    """Creates iagl.db from iagl_backup.db.zip if it is missing. Returns True if created."""
+    db     = os.path.join(IAGL_DATA_DIR, 'iagl.db')
+    backup = os.path.join(IAGL_DATA_DIR, 'iagl_backup.db.zip')
+    if os.path.exists(db) or not os.path.exists(backup):
+        return False
+    tmp = db + '.part'
+    try:
+        with zipfile.ZipFile(backup) as z:
+            member = next((i for i in z.infolist()
+                           if os.path.basename(i.filename) == 'iagl.db'), None)
+            if member is None:
+                log("IAGL backup has no iagl.db inside; leaving it to IAGL.", xbmc.LOGWARNING)
+                return False
+            free = shutil.disk_usage(IAGL_DATA_DIR).free
+            if free < member.file_size + 50 * 1048576:
+                log(f"Not enough space to unpack the IAGL database "
+                    f"({member.file_size // 1048576} MB needed, {free // 1048576} MB free).",
+                    xbmc.LOGWARNING)
+                return False
+            if progress:
+                progress("Preparing the games database...")
+            with z.open(member) as src, open(tmp, 'wb') as dst:
+                shutil.copyfileobj(src, dst, 1048576)
+        os.replace(tmp, db)
+        log(f"Unpacked IAGL database ({member.file_size // 1048576} MB) from its backup.")
+        return True
+    except Exception as e:
+        log(f"Could not unpack the IAGL database: {e}", xbmc.LOGWARNING)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Video buffer (Kodi 21: Settings > Services > Caching)
+# ---------------------------------------------------------------------------
+# Kodi 21 ignores the <cache> section of advancedsettings.xml (which is what
+# EZ Maintenance+ "USE OPTIMAL" wrote). The real setting is the GUI setting
+# filecache.memorysize, which only accepts these values (MB):
+CACHE_SIZES_MB = [16, 20, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024]
+CACHE_MARKER   = os.path.join(HOME, 'cache_tuned.json')
+
+
+def device_ram_mb():
+    """Total RAM in MB as Kodi reports it, or None."""
+    label = xbmc.getInfoLabel('System.Memory(total)') or ''      # e.g. "1937MB"
+    m = re.search(r'([\d.]+)\s*(MB|GB)', label, re.I)
+    if m:
+        value = float(m.group(1))
+        return int(value * 1024 if m.group(2).upper() == 'GB' else value)
+    try:
+        return int(os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') / 1048576)
+    except Exception:
+        return None
+
+
+def recommended_cache_mb(ram_mb):
+    """
+    Kodi can use roughly 3x the buffer size in RAM, so stay well inside it:
+      1 GB devices -> 64 MB, 2 GB -> 128 MB, 3 GB -> 192 MB, 4 GB+ -> 256 MB
+    (Android reports a little under the advertised RAM, hence the thresholds.)
+    """
+    if not ram_mb:
+        return None
+    if ram_mb < 1400:
+        return 64
+    if ram_mb < 2400:
+        return 128
+    if ram_mb < 3400:
+        return 192
+    return 256
+
+
+def tune_cache(force=False):
+    """
+    Sets Kodi's video buffer to suit this device's RAM, once per install
+    (the marker is removed whenever a build or Fresh Start is installed, and
+    a value the user later changes by hand is left alone). Returns MB set.
+    """
+    if not force and os.path.exists(CACHE_MARKER):
+        return None
+    ram  = device_ram_mb()
+    size = recommended_cache_mb(ram)
+    if size not in CACHE_SIZES_MB:
+        log(f"Buffer: could not determine device RAM ({ram}); leaving Kodi's setting.")
+        return None
+    _rpc("Settings.SetSettingValue", {"setting": "filecache.memorysize", "value": size})
+    ok, value = get_kodi_setting('filecache.memorysize')
+    if not ok or value != size:
+        log(f"Buffer: Kodi did not accept {size} MB (now {value}).", xbmc.LOGWARNING)
+        return None
+    try:
+        with open(CACHE_MARKER, 'w') as f:
+            json.dump({'ram_mb': ram, 'memorysize_mb': size}, f)
+    except Exception:
+        pass
+    log(f"Buffer set to {size} MB for a device with {ram} MB RAM.")
+    return size
