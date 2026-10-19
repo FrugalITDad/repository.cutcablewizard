@@ -223,6 +223,7 @@ def smart_fresh_start(manifest):
 
         updates.restore_admin_config(admin_config)
         updates.restore_newest_wizard()
+        updates.tune_images()
 
         dp.close()
         transfer.finish(zip_path)
@@ -453,6 +454,7 @@ def install_build(url, name, version, build_id,
 
         # Gaming builds: unpack IAGL's game database (shipped zipped)
         updates.repair_iagl_db(progress=lambda m: dp.update(100, m))
+        updates.tune_images()        # smaller cached artwork from the first start
 
         if maintenance:
             xbmc.log(f"[CutCableWizard] Maintenance install of {name} v{version}: "
@@ -791,7 +793,9 @@ def main_menu():
         if manifest:
             builds = [b for b in manifest.get('builds', [])
                       if b['id'] not in HIDDEN_BUILD_IDS
-                      and not b.get('admin_only', False)]
+                      and not b.get('admin_only', False)
+                      # Xbox Kodi has no emulator add-ons, so games can't launch
+                      and not (updates.is_xbox() and updates.is_gaming_build(b))]
 
         if admin_build:
             builds.append(admin_build)

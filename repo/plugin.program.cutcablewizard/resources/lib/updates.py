@@ -708,6 +708,17 @@ FRIENDLY_ADDON_NAMES = {
 _NATIVE_EXT = ('.so', '.dll', '.dylib')
 
 
+def is_xbox():
+    """True on Xbox (and the Microsoft Store version of Kodi on a PC)."""
+    return bool(xbmc.getCondVisibility('System.Platform.UWP'))
+
+
+def is_gaming_build(build):
+    """Gaming builds need Kodi's emulator add-ons, which Xbox Kodi doesn't have."""
+    return ('iagl' in (build.get('firstrun_steps') or [])
+            or 'gaming' in str(build.get('id', '')).lower())
+
+
 def this_platform():
     """
     Returns (tags, label): the Kodi <platform> names this device can load,
@@ -729,9 +740,14 @@ def this_platform():
         else:
             tag = 'android'
         return {'android', tag}, f"{bits}-bit Android"
-    if cond('System.Platform.Windows') or cond('System.Platform.UWP'):
+    # Xbox and the Microsoft Store version of Kodi (UWP) can only load add-ons
+    # built for 'windowsstore' - desktop Windows builds don't load there.
+    # Check it before desktop Windows, which also reports as Windows.
+    if cond('System.Platform.UWP'):
+        return {'windowsstore'}, "Xbox / Microsoft Store Kodi"
+    if cond('System.Platform.Windows'):
         tag = 'windows-x86_64' if bits == 64 else 'windows-i686'
-        return {'windows', 'windx', 'windowsstore', tag}, "Windows"
+        return {'windows', 'windx', tag}, "Windows"
     if cond('System.Platform.IOS'):
         return {'ios', 'ios-aarch64', 'darwin_embedded'}, "iOS"
     if cond('System.Platform.TVOS'):
@@ -921,6 +937,7 @@ def repair_iagl_db(progress=None):
 # filecache.memorysize, which only accepts these values (MB):
 CACHE_SIZES_MB = [16, 20, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024]
 CACHE_MARKER   = os.path.join(HOME, 'cache_tuned.json')
+UWP_CACHE_MB   = 64     # Xbox apps get ~1 GB of memory (Kodi uses ~3x the buffer)
 
 
 def device_ram_mb():
@@ -953,6 +970,62 @@ def recommended_cache_mb(ram_mb):
     return 256
 
 
+# Size Kodi stores downloaded artwork at (posters / backgrounds). Kodi 21's
+# defaults are 720 / 1080; smaller copies decode faster in widgets and keep
+# the Thumbnails folder about half the size on low-storage devices.
+IMAGE_RES = (('imageres', 512), ('fanartres', 720))
+ADVANCED_SETTINGS = os.path.join(HOME, 'userdata', 'advancedsettings.xml')
+
+
+def tune_images():
+    """
+    Adds <imageres>/<fanartres> to advancedsettings.xml when they are not
+    already set (a value already in the file is left alone). Kodi reads the
+    file at startup, so this applies from the next start. Returns the list
+    of tags added.
+    """
+    path = ADVANCED_SETTINGS
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            text = f.read()
+    except FileNotFoundError:
+        text = '<advancedsettings>\n</advancedsettings>\n'
+    except Exception as e:
+        log(f"Image sizes: could not read advancedsettings.xml: {e}", xbmc.LOGWARNING)
+        return []
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError as e:
+        log(f"Image sizes: advancedsettings.xml is not valid XML ({e}); leaving it alone.",
+            xbmc.LOGWARNING)
+        return []
+    if root.tag != 'advancedsettings':
+        return []
+    missing = [(tag, val) for tag, val in IMAGE_RES if root.find(tag) is None]
+    if not missing:
+        return []
+    close = text.rfind('</advancedsettings>')
+    if close == -1:                                   # <advancedsettings/>
+        text = re.sub(r'<advancedsettings\s*/>', '<advancedsettings>\n</advancedsettings>', text, 1)
+        close = text.rfind('</advancedsettings>')
+    lines = ''.join(f'    <{tag}>{val}</{tag}>\n' for tag, val in missing)
+    head = text[:close].rstrip() + '\n'
+    text = head + lines + text[close:]
+    try:
+        ET.fromstring(text)                           # never write a broken file
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + '.part'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except Exception as e:
+        log(f"Image sizes: could not update advancedsettings.xml: {e}", xbmc.LOGWARNING)
+        return []
+    added = [tag for tag, _ in missing]
+    log(f"Image sizes: added {', '.join(f'{t}={v}' for t, v in missing)} to advancedsettings.xml.")
+    return added
+
+
 def tune_cache(force=False):
     """
     Sets Kodi's video buffer to suit this device's RAM, once per install
@@ -963,6 +1036,10 @@ def tune_cache(force=False):
         return None
     ram  = device_ram_mb()
     size = recommended_cache_mb(ram)
+    if xbmc.getCondVisibility('System.Platform.UWP'):
+        # Xbox gives apps about 1 GB whatever the console has, while Kodi
+        # reports the console's full memory - use the 1 GB size.
+        size = UWP_CACHE_MB
     if size not in CACHE_SIZES_MB:
         log(f"Buffer: could not determine device RAM ({ram}); leaving Kodi's setting.")
         return None

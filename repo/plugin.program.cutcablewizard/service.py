@@ -715,6 +715,7 @@ def run_service():
 
     # Size Kodi's video buffer for this device's RAM (once per install)
     updates.tune_cache()
+    updates.tune_images()
 
     if os.path.exists(FIRSTRUN_FILE):
         run_first_time_setup(monitor)

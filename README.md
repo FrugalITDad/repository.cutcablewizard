@@ -33,6 +33,8 @@ Each build includes everything in the one above it.
   hardware (e.g. HD streaming sticks). You'll also need a free **[Archive.org account](https://archive.org/account/signup)**
   during First Run Setup so games can download.
 - **Pro builds** are only useful if you have access to a **self-hosted Jellyfin server**. Otherwise choose Plus.
+- **Xbox:** choose **Plus** or **Pro**. Kodi on Xbox can't run the game emulators, so the gaming builds
+  aren't offered there.
 - Current versions and download sizes are shown in the wizard when you pick a build.
 
 ---
