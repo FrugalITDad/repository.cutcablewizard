@@ -716,6 +716,10 @@ def run_service():
     # Size Kodi's video buffer for this device's RAM (once per install)
     updates.tune_cache()
     updates.tune_images()
+    # Menu backgrounds etc. saved with another device's full path -> special://
+    if updates.fix_skin_paths():
+        xbmc.executebuiltin('ReloadSkin()')
+        xbmc.sleep(2000)
 
     if os.path.exists(FIRSTRUN_FILE):
         run_first_time_setup(monitor)

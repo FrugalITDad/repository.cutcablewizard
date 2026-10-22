@@ -1026,6 +1026,101 @@ def tune_images():
     return added
 
 
+# ---------------------------------------------------------------------------
+# Portable paths in skin / menu settings
+# ---------------------------------------------------------------------------
+# Picking an image through "Device storage" makes the skin save the full
+# path of the device the build was made on, e.g.
+#   /storage/emulated/0/Android/data/org.xbmc.kodi/files/.kodi/userdata/backgrounds/x.jpg
+# That path does not exist on Windows / Xbox and can differ on other boxes,
+# so menu backgrounds (and other custom images) show up blank after an
+# install. These are rewritten to special://profile/... (userdata) and
+# special://home/... (the Kodi folder), which work on every device.
+_SEP = r'(?:/|\\+)'                          # /  or backslashes (doubled in .properties)
+_KODI_DIR = r'(?:\.kodi|Kodi|kodi)'
+_ABS_START = r'(?<![\w:/\\.])(?:[A-Za-z]:|/)'  # C:  or a leading /
+_REST = r'[^"\'<>\r\n,\]\)]*'
+_ABS_USERDATA = re.compile(_ABS_START + r'[^"\'<>\r\n]*?' + _SEP + _KODI_DIR + _SEP
+                           + r'userdata' + _SEP + '(' + _REST + ')')
+_ABS_HOME = re.compile(_ABS_START + r'[^"\'<>\r\n]*?' + _SEP + _KODI_DIR + _SEP
+                       + r'((?:addons|media)' + _SEP + _REST + ')')
+
+
+def _portable(text):
+    def fix(prefix):
+        def sub(m):
+            return prefix + re.sub(_SEP, '/', m.group(1))
+        return sub
+    text, n1 = _ABS_USERDATA.subn(fix('special://profile/'), text)
+    text, n2 = _ABS_HOME.subn(fix('special://home/'), text)
+    return text, n1 + n2
+
+
+def _path_files():
+    """Skin and menu settings files that can hold image paths."""
+    ud = os.path.join(HOME, 'userdata')
+    out = [os.path.join(ud, 'favourites.xml')]
+    ad = os.path.join(ud, 'addon_data')
+    try:
+        for name in os.listdir(ad):
+            d = os.path.join(ad, name)
+            if name == 'script.skinshortcuts':
+                out += [os.path.join(d, f) for f in os.listdir(d)
+                        if f.endswith(('.xml', '.properties'))]
+            elif name.startswith('skin.'):
+                out.append(os.path.join(d, 'settings.xml'))
+    except OSError:
+        pass
+    # the menu the skin is drawing now (generated from the files above)
+    addons = os.path.join(HOME, 'addons')
+    try:
+        for name in os.listdir(addons):
+            if not name.startswith('skin.'):
+                continue
+            for root, _dirs, files in os.walk(os.path.join(addons, name)):
+                out += [os.path.join(root, f) for f in files
+                        if f == 'script-skinshortcuts-includes.xml']
+    except OSError:
+        pass
+    return [f for f in out if os.path.isfile(f)]
+
+
+def fix_skin_paths():
+    """
+    Rewrites device-specific absolute userdata / Kodi-folder paths in the
+    skin, Skin Shortcuts and favourites files to special:// paths. Safe to
+    run every start (only changes files that still hold such a path).
+    Returns the number of paths rewritten.
+    """
+    total = 0
+    for path in _path_files():
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                text = f.read()
+        except Exception:
+            continue
+        new, n = _portable(text)
+        if not n:
+            continue
+        if path.endswith('.xml'):
+            try:
+                ET.fromstring(new)                    # never write a broken file
+            except ET.ParseError:
+                log(f"Skin paths: skipped {path} (result would not be valid XML)",
+                    xbmc.LOGWARNING)
+                continue
+        try:
+            tmp = path + '.part'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                f.write(new)
+            os.replace(tmp, path)
+            total += n
+            log(f"Skin paths: made {n} path(s) portable in {os.path.relpath(path, HOME)}")
+        except Exception as e:
+            log(f"Skin paths: could not update {path}: {e}", xbmc.LOGWARNING)
+    return total
+
+
 def tune_cache(force=False):
     """
     Sets Kodi's video buffer to suit this device's RAM, once per install
