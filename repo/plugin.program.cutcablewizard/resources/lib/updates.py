@@ -1026,99 +1026,46 @@ def tune_images():
     return added
 
 
-# ---------------------------------------------------------------------------
-# Portable paths in skin / menu settings
-# ---------------------------------------------------------------------------
-# Picking an image through "Device storage" makes the skin save the full
-# path of the device the build was made on, e.g.
-#   /storage/emulated/0/Android/data/org.xbmc.kodi/files/.kodi/userdata/backgrounds/x.jpg
-# That path does not exist on Windows / Xbox and can differ on other boxes,
-# so menu backgrounds (and other custom images) show up blank after an
-# install. These are rewritten to special://profile/... (userdata) and
-# special://home/... (the Kodi folder), which work on every device.
-_SEP = r'(?:/|\\+)'                          # /  or backslashes (doubled in .properties)
-_KODI_DIR = r'(?:\.kodi|Kodi|kodi)'
-_ABS_START = r'(?<![\w:/\\.])(?:[A-Za-z]:|/)'  # C:  or a leading /
-_REST = r'[^"\'<>\r\n,\]\)]*'
-_ABS_USERDATA = re.compile(_ABS_START + r'[^"\'<>\r\n]*?' + _SEP + _KODI_DIR + _SEP
-                           + r'userdata' + _SEP + '(' + _REST + ')')
-_ABS_HOME = re.compile(_ABS_START + r'[^"\'<>\r\n]*?' + _SEP + _KODI_DIR + _SEP
-                       + r'((?:addons|media)' + _SEP + _REST + ')')
+# SlyGuy add-ons (IPTV Merge and its Pluto / Samsung / Roku / PBS sources)
+# save a few values about the device they run on. A build carries the build
+# device's values to every device: its ID, its CPU type (wrong on 64-bit
+# boxes and Xbox) and the time of its last guide merge. Clearing them makes
+# each device work its own out again on first start. Sources, regions and
+# every other setting are left as they are.
+SLYGUY_SETTINGS_DB = os.path.join(HOME, 'userdata', 'addon_data', 'script.module.slyguy', 'settings.db')
+SLYGUY_DEVICE_VALUES = (
+    ('script.module.slyguy', 'mac'),
+    ('script.module.slyguy', 'arch'),
+    ('plugin.program.iptv.merge', 'userdata_last_run'),
+)
 
 
-def _portable(text):
-    def fix(prefix):
-        def sub(m):
-            return prefix + re.sub(_SEP, '/', m.group(1))
-        return sub
-    text, n1 = _ABS_USERDATA.subn(fix('special://profile/'), text)
-    text, n2 = _ABS_HOME.subn(fix('special://home/'), text)
-    return text, n1 + n2
-
-
-def _path_files():
-    """Skin and menu settings files that can hold image paths."""
-    ud = os.path.join(HOME, 'userdata')
-    out = [os.path.join(ud, 'favourites.xml')]
-    ad = os.path.join(ud, 'addon_data')
+def reset_slyguy_device_values():
+    """Removes the build device's own SlyGuy values. Returns how many."""
+    if not os.path.isfile(SLYGUY_SETTINGS_DB):
+        return 0
     try:
-        for name in os.listdir(ad):
-            d = os.path.join(ad, name)
-            if name == 'script.skinshortcuts':
-                out += [os.path.join(d, f) for f in os.listdir(d)
-                        if f.endswith(('.xml', '.properties'))]
-            elif name.startswith('skin.'):
-                out.append(os.path.join(d, 'settings.xml'))
-    except OSError:
-        pass
-    # the menu the skin is drawing now (generated from the files above)
-    addons = os.path.join(HOME, 'addons')
-    try:
-        for name in os.listdir(addons):
-            if not name.startswith('skin.'):
-                continue
-            for root, _dirs, files in os.walk(os.path.join(addons, name)):
-                out += [os.path.join(root, f) for f in files
-                        if f == 'script-skinshortcuts-includes.xml']
-    except OSError:
-        pass
-    return [f for f in out if os.path.isfile(f)]
-
-
-def fix_skin_paths():
-    """
-    Rewrites device-specific absolute userdata / Kodi-folder paths in the
-    skin, Skin Shortcuts and favourites files to special:// paths. Safe to
-    run every start (only changes files that still hold such a path).
-    Returns the number of paths rewritten.
-    """
-    total = 0
-    for path in _path_files():
+        import sqlite3
+        con = sqlite3.connect(SLYGUY_SETTINGS_DB, timeout=5)
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                text = f.read()
-        except Exception:
-            continue
-        new, n = _portable(text)
-        if not n:
-            continue
-        if path.endswith('.xml'):
-            try:
-                ET.fromstring(new)                    # never write a broken file
-            except ET.ParseError:
-                log(f"Skin paths: skipped {path} (result would not be valid XML)",
+            cols = {r[1] for r in con.execute("PRAGMA table_info(settings)")}
+            if not {'addon_id', 'key'} <= cols:
+                log(f"SlyGuy: unexpected settings layout {sorted(cols)}; left alone.",
                     xbmc.LOGWARNING)
-                continue
-        try:
-            tmp = path + '.part'
-            with open(tmp, 'w', encoding='utf-8') as f:
-                f.write(new)
-            os.replace(tmp, path)
-            total += n
-            log(f"Skin paths: made {n} path(s) portable in {os.path.relpath(path, HOME)}")
-        except Exception as e:
-            log(f"Skin paths: could not update {path}: {e}", xbmc.LOGWARNING)
-    return total
+                return 0
+            removed = 0
+            for addon_id, key in SLYGUY_DEVICE_VALUES:
+                removed += con.execute("DELETE FROM settings WHERE addon_id=? AND key=?",
+                                       (addon_id, key)).rowcount
+            con.commit()
+        finally:
+            con.close()
+    except Exception as e:
+        log(f"SlyGuy: could not clear device values: {e}", xbmc.LOGWARNING)
+        return 0
+    if removed:
+        log(f"SlyGuy: cleared {removed} value(s) copied from the build device.")
+    return removed
 
 
 def tune_cache(force=False):

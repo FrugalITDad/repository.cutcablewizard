@@ -225,21 +225,137 @@ def get_installed_info():
 # ---------------------------------------------------------------------------
 # IPTV Guide Sync (used by First Run and by post-update restore)
 # ---------------------------------------------------------------------------
+IPTV_MERGE_DATA   = os.path.join(HOME, 'userdata', 'addon_data', 'plugin.program.iptv.merge')
+IPTV_ATTEMPTS     = os.path.join(HOME, 'iptv_sync_attempts.txt')
+IPTV_MAX_ATTEMPTS = 2       # Kodi closed during the sync this many times -> stop forcing it
+IPTV_TIMEOUT      = 600     # longest we wait for a merge to finish (seconds)
+IPTV_START_WAIT   = 90      # ask IPTV Merge for a merge only if none started by then
+
+
+def _read_attempts():
+    try:
+        with open(IPTV_ATTEMPTS) as f:
+            return int(f.read().strip() or 0)
+    except Exception:
+        return 0
+
+
+def _write_attempts(n):
+    try:
+        if n:
+            with open(IPTV_ATTEMPTS, 'w') as f:
+                f.write(str(n))
+        elif os.path.exists(IPTV_ATTEMPTS):
+            os.remove(IPTV_ATTEMPTS)
+    except Exception:
+        pass
+
+
+def _merge_outputs(since):
+    """(playlist, epg) -> size if rewritten after `since`, else None."""
+    out = []
+    for name in ('playlist.m3u8', 'epg.xml'):
+        path = os.path.join(IPTV_MERGE_DATA, name)
+        try:
+            st = os.stat(path)
+            out.append(st.st_size if st.st_mtime >= since - 2 else None)
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
+def _merge_started(since):
+    """True once a merge is running (working files) or has written output."""
+    if any(v is not None for v in _merge_outputs(since)):
+        return True
+    try:
+        tmp = os.path.join(IPTV_MERGE_DATA, 'tmp')
+        return any(os.path.getmtime(os.path.join(tmp, f)) >= since - 2 for f in os.listdir(tmp))
+    except OSError:
+        return False
+
+
 def run_iptv_sync(monitor, title):
+    """
+    Enables IPTV Merge, which then merges by itself, and waits until the
+    merge has actually written its playlist and guide (instead of a fixed
+    timer), so nothing else starts while Kodi is busy loading the guide.
+    A merge is only requested if none has started after IPTV_START_WAIT.
+
+    A merge that makes Kodi close is counted; after IPTV_MAX_ATTEMPTS such
+    closes on this device setup skips the guide and leaves IPTV Merge off
+    (enabling it would start the same merge), so setup can finish.
+    Returns True when the merge finished.
+    """
+    attempts = _read_attempts()
+    if attempts >= IPTV_MAX_ATTEMPTS:
+        # Enabling IPTV Merge starts a merge straight away, so on this device
+        # it stays off - otherwise Kodi would close again on every start.
+        xbmc.log(f"[CutCableWizard] IPTV sync: Kodi closed during {attempts} earlier "
+                 "syncs on this device; leaving IPTV Merge off.", xbmc.LOGWARNING)
+        _write_attempts(0)
+        xbmcgui.Dialog().ok(
+            title,
+            "Kodi closed twice on this device while building the Live TV "
+            "guide, so setup has skipped it and left IPTV Merge switched off.\n\n"
+            "Everything else is set up. To try the guide again later, open "
+            "the [B]CutCable Wizard[/B] and run [B]First Run Setup[/B].")
+        return False
+
+    # Let the home screen, widgets and the skin's menu build finish first:
+    # the merge and the guide load that follows it are the heaviest work
+    # of the whole setup.
+    while is_skin_busy(monitor):
+        if monitor.waitForAbort(2):
+            return False
+    if monitor.waitForAbort(5):
+        return False
+
+    _write_attempts(attempts + 1)          # cleared again once the merge finishes
+    started = time.time()
+    # IPTV Merge starts a merge by itself as soon as it is enabled (a new
+    # install has no guide files yet), and Live TV asks it for channels
+    # too. Asking for another merge on top made two run at once on slower
+    # devices (they share a working folder) - so only ask if none starts.
     enable_addon("plugin.program.iptv.merge")
-    xbmc.sleep(1000)
-    xbmc.executebuiltin("RunPlugin(plugin://plugin.program.iptv.merge/?_=merge)")
+    requested = False
     dp = xbmcgui.DialogProgress()
     dp.create(title, "Syncing Live TV Guide...")
-    total_time = 90
-    for i in range(total_time):
+    done, last, stable = False, None, 0
+    for i in range(IPTV_TIMEOUT):
         if monitor.waitForAbort(1) or dp.iscanceled():
             break
-        dp.update(
-            int((i / float(total_time)) * 100),
-            f"Finalizing IPTV Guide setup...\nTime remaining: {total_time - i}s"
-        )
+        if not requested and i >= IPTV_START_WAIT and not _merge_started(started):
+            xbmc.log("[CutCableWizard] IPTV sync: no automatic merge started; "
+                     "requesting one.", xbmc.LOGINFO)
+            xbmc.executebuiltin("RunPlugin(plugin://plugin.program.iptv.merge/?_=merge)")
+            requested = True
+        cur = _merge_outputs(started)
+        if cur[0] is not None and (cur[1] is not None or i > 120):
+            stable = stable + 1 if cur == last else 0
+            if stable >= 5:                 # files written and no longer growing
+                done = True
+                break
+        last = cur
+        pct = min(95, int(i * 100 / 180))
+        dp.update(pct, "Building your Live TV channels and guide...\n"
+                       f"This can take a few minutes on smaller devices ({i}s)")
+    if done:
+        # IPTV Merge restarts the PVR client to load the new guide; give it
+        # a moment before the next dialog appears.
+        dp.update(100, "Loading the new guide...")
+        for _ in range(10):
+            if monitor.waitForAbort(1):
+                break
+        _write_attempts(0)
+        xbmc.log(f"[CutCableWizard] IPTV sync finished in {int(time.time() - started)}s.",
+                 xbmc.LOGINFO)
+    else:
+        _write_attempts(0)                 # stopped by the user / timed out, not a crash
+        xbmc.log("[CutCableWizard] IPTV sync: no finished merge seen; continuing.",
+                 xbmc.LOGWARNING)
     dp.close()
+    return done
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +569,30 @@ def run_first_time_setup(monitor):
     active  = [s for s in ALL_STEPS if allowed is None or s in allowed]
     total   = len(active)
 
+    build_id_now, _ = get_installed_info()
+    finished = []
+
+    def mark_done(step):
+        """
+        Saves progress after each step: a step that is finished is not
+        asked again if Kodi closes later in setup (e.g. during the guide
+        sync), only the steps still left are.
+        """
+        if step not in active or step in finished:
+            return
+        finished.append(step)
+        remaining = [s for s in active if s not in finished]
+        try:
+            if remaining:
+                with open(FIRSTRUN_STEPS_FILE, 'w') as f:
+                    f.write(','.join(remaining))
+            if build_id_now:
+                previous = updates.read_completed_firstrun(build_id_now) or []
+                updates.write_completed_firstrun(build_id_now, set(previous) | set(finished))
+        except Exception as e:
+            xbmc.log(f"[CutCableWizard] First Run: could not save progress: {e}",
+                     xbmc.LOGWARNING)
+
     def n(step_name):
         return active.index(step_name) + 1 if step_name in active else 0
 
@@ -465,6 +605,8 @@ def run_first_time_setup(monitor):
             "Enable automatic subtitles?"
         ):
             set_kodi_setting("subtitles.enabled", True)
+
+    mark_done('subtitles')
 
     # ── Step: Sound ───────────────────────────────────────────────────────
     # TV speakers: plain stereo (the build default). Soundbar / receiver:
@@ -497,6 +639,8 @@ def run_first_time_setup(monitor):
             xbmc.log(f"[CutCableWizard] Sound: passthrough {'on' if ok else 'not available'}.",
                      xbmc.LOGINFO)
 
+    mark_done('audio')
+
     # ── Step: Weather ─────────────────────────────────────────────────────
     if 'weather' in active:
         if dialog.yesno(
@@ -511,6 +655,8 @@ def run_first_time_setup(monitor):
             )
             xbmc.executebuiltin("Addon.OpenSettings(weather.multi)")
             wait_for_settings_dialog(monitor)
+
+    mark_done('weather')
 
     # ── Step: Device Name ─────────────────────────────────────────────────
     if 'device_name' in active:
@@ -531,6 +677,8 @@ def run_first_time_setup(monitor):
         if name:
             set_kodi_setting("services.devicename", name)
 
+    mark_done('device_name')
+
     # ── Step: Simkl ───────────────────────────────────────────────────────
     # Enable if accepted so it launches correctly. Disable if declined so
     # it does not prompt on every Kodi boot.
@@ -550,6 +698,8 @@ def run_first_time_setup(monitor):
                 disable_addon("script.simkl")
         else:
             xbmc.log("[CutCableWizard] script.simkl not found – skipping.", xbmc.LOGINFO)
+
+    mark_done('simkl')
 
     # ── Step: JellyCon ────────────────────────────────────────────────────
     if 'jellycon' in active:
@@ -572,6 +722,8 @@ def run_first_time_setup(monitor):
         else:
             xbmc.log("[CutCableWizard] plugin.video.jellycon not found – skipping.", xbmc.LOGINFO)
 
+    mark_done('jellycon')
+
     # ── Step: IAGL Archive.org ────────────────────────────────────────────
     if 'iagl' in active:
         if is_addon_present("plugin.program.iagl"):
@@ -592,9 +744,13 @@ def run_first_time_setup(monitor):
         else:
             xbmc.log("[CutCableWizard] plugin.program.iagl not found – skipping.", xbmc.LOGINFO)
 
+    mark_done('iagl')
+
     # ── Step: IPTV Guide Sync ─────────────────────────────────────────────
     if 'iptv_sync' in active:
         run_iptv_sync(monitor, f"Setup ({n('iptv_sync')}/{total}): IPTV Guide Sync")
+
+    mark_done('iptv_sync')
 
     # ── Record which steps are done so future updates can skip them ───────
     build_id, _ = get_installed_info()
@@ -715,11 +871,6 @@ def run_service():
 
     # Size Kodi's video buffer for this device's RAM (once per install)
     updates.tune_cache()
-    updates.tune_images()
-    # Menu backgrounds etc. saved with another device's full path -> special://
-    if updates.fix_skin_paths():
-        xbmc.executebuiltin('ReloadSkin()')
-        xbmc.sleep(2000)
 
     if os.path.exists(FIRSTRUN_FILE):
         run_first_time_setup(monitor)

@@ -224,7 +224,7 @@ def smart_fresh_start(manifest):
         updates.restore_admin_config(admin_config)
         updates.restore_newest_wizard()
         updates.tune_images()
-        updates.fix_skin_paths()
+        updates.reset_slyguy_device_values()
 
         dp.close()
         transfer.finish(zip_path)
@@ -442,6 +442,8 @@ def install_build(url, name, version, build_id,
         updates.restore_admin_config(admin_config)
         # Don't let an older wizard bundled in the build replace this one.
         updates.restore_newest_wizard()
+        # Build device's SlyGuy ID / CPU type / last merge time
+        updates.reset_slyguy_device_values()
 
         if saved_favourites:
             updates.restore_favourites(saved_favourites)
@@ -456,7 +458,6 @@ def install_build(url, name, version, build_id,
         # Gaming builds: unpack IAGL's game database (shipped zipped)
         updates.repair_iagl_db(progress=lambda m: dp.update(100, m))
         updates.tune_images()        # smaller cached artwork from the first start
-        updates.fix_skin_paths()     # menu backgrounds saved with the build device's path
 
         if maintenance:
             xbmc.log(f"[CutCableWizard] Maintenance install of {name} v{version}: "
